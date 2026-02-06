@@ -3,7 +3,7 @@ doc: 00_problem
 spec_date: 2026-02-06
 slug: golang-service-healthz-swagger
 mode: Quick
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []

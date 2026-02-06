@@ -3,7 +3,7 @@ doc: 03_tasks
 spec_date: 2026-02-06
 slug: golang-service-healthz-swagger
 mode: Quick
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []
@@ -103,3 +103,14 @@ links:
 - Feature flag: Not required; this is initial service bootstrap.
 - Migration sequencing: None.
 - Rollback steps: Revert feature commit to return repository to pre-service state.
+
+## Validation evidence
+
+- Date: 2026-02-06
+- Commands:
+  - `go test ./...` (pass)
+  - `go fmt ./...` (pass)
+  - `go vet ./...` (pass)
+  - `go list ./...` (pass)
+  - `make test` (pass)
+  - `make lint` (pass)

@@ -33,7 +33,7 @@ repos:
     rev: v1.64.8
     hooks:
       - id: golangci-lint
-        args: ["run", "--fix", "--timeout=5m"]
+        args: ["--fix", "--timeout=5m"]
         pass_filenames: false
         types: [go]
   - repo: local
