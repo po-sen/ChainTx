@@ -1,0 +1,35 @@
+name: chaintx
+
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_DB: chaintx
+      POSTGRES_USER: chaintx
+      POSTGRES_PASSWORD: chaintx
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chaintx -d chaintx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - chaintx-postgres-data:/var/lib/postgresql
+
+  app:
+    build:
+      context: ..
+      dockerfile: build/package/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      OPENAPI_SPEC_PATH: /app/api/openapi.yaml
+      DATABASE_URL: postgresql://chaintx:chaintx@postgres:5432/chaintx?sslmode=disable
+    ports:
+      - "8080:8080"
+
+volumes:
+  chaintx-postgres-data:

@@ -31,3 +31,12 @@ func NewInternal(code, message string, metadata map[string]string) *AppError {
 		Metadata: metadata,
 	}
 }
+
+func NewValidation(code, message string, metadata map[string]string) *AppError {
+	return &AppError{
+		Type:     TypeValidation,
+		Code:     code,
+		Message:  message,
+		Metadata: metadata,
+	}
+}

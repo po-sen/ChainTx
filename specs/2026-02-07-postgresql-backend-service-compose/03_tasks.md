@@ -3,7 +3,7 @@ doc: 03_tasks
 spec_date: 2026-02-07
 slug: postgresql-backend-service-compose
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -43,9 +43,9 @@ links:
    - Output: DB config support for `DATABASE_URL` plus DI container updates without business logic in `cmd/`.
    - Linked requirements: FR-001, FR-007, NFR-006
    - Validation:
-     - [ ] How to verify (manual steps or command): `go test ./...`
-     - [ ] Expected result: Build/tests pass with new config fields and DI wiring.
-     - [ ] Logs/metrics to check (if applicable): Startup logs include only redacted DB target details (no raw URL credentials).
+     - [x] How to verify (manual steps or command): `go test ./...`
+     - [x] Expected result: Build/tests pass with new config fields and DI wiring.
+     - [x] Logs/metrics to check (if applicable): Startup logs include only redacted DB target details (no raw URL credentials).
 
 2. T-002 - Define application ports and initialization use case
 
@@ -53,9 +53,9 @@ links:
    - Output: Application-layer interfaces/use case with unit tests using mocked outbound ports.
    - Linked requirements: FR-002, FR-003, FR-007, NFR-002, NFR-006
    - Validation:
-     - [ ] How to verify (manual steps or command): `go test ./internal/application/...`
-     - [ ] Expected result: Unit tests cover success/failure/timeout paths.
-     - [ ] Logs/metrics to check (if applicable): Structured error mapping includes stable code/message.
+     - [x] How to verify (manual steps or command): `go test ./internal/application/...`
+     - [x] Expected result: Unit tests cover success/failure/timeout paths.
+     - [x] Logs/metrics to check (if applicable): Structured error mapping includes stable code/message.
 
 3. T-003 - Implement PostgreSQL outbound adapter
 
@@ -63,9 +63,9 @@ links:
    - Output: Outbound adapter package under `internal/adapters/outbound/persistence/postgresql` implementing application ports.
    - Linked requirements: FR-002, FR-003, FR-007, NFR-001, NFR-002, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): adapter integration test against local PostgreSQL instance/container.
-     - [ ] Expected result: Adapter reports readiness success when DB is available and typed failure when unavailable.
-     - [ ] Logs/metrics to check (if applicable): Retry attempts and final readiness result are logged.
+     - [x] How to verify (manual steps or command): adapter integration test against local PostgreSQL instance/container.
+     - [x] Expected result: Adapter reports readiness success when DB is available and typed failure when unavailable.
+     - [x] Logs/metrics to check (if applicable): Retry attempts and final readiness result are logged.
 
 4. T-004 - Add SQL migration workflow
 
@@ -73,19 +73,19 @@ links:
    - Output: Versioned migration directory + `golang-migrate` runner integration with idempotent behavior; baseline migration creates `app.bootstrap_metadata`.
    - Linked requirements: FR-004, FR-003, NFR-002, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): start service twice against same DB, then query `app.bootstrap_metadata` and `schema_migrations`.
-     - [ ] Expected result: First run creates schema/table and inserts `bootstrap_version`; second run performs no duplicate inserts or destructive work.
-     - [ ] Logs/metrics to check (if applicable): Applied/skipped migration counts are logged.
+     - [x] How to verify (manual steps or command): start service twice against same DB, then query `app.bootstrap_metadata` and `schema_migrations`.
+     - [x] Expected result: First run creates schema/table and inserts `bootstrap_version`; second run performs no duplicate inserts or destructive work.
+     - [x] Logs/metrics to check (if applicable): Applied/skipped migration counts are logged.
 
 5. T-005 - Create simple docker compose stack
 
-   - Scope: Add root `docker-compose.yml` for app + PostgreSQL with `postgres:latest`, persistent volume, and startup dependency.
+   - Scope: Add `deployments/docker-compose.yml` for app + PostgreSQL with `postgres:latest`, persistent volume, and startup dependency; place Dockerfile under `build/package/Dockerfile`.
    - Output: Compose file enabling one-command local startup.
    - Linked requirements: FR-005, NFR-001, NFR-003
    - Validation:
-     - [ ] How to verify (manual steps or command): `docker compose up --build` then `curl -i http://localhost:8080/healthz`
-     - [ ] Expected result: Both containers are healthy/running and HTTP endpoint is reachable.
-     - [ ] Logs/metrics to check (if applicable): App logs show successful DB readiness and migration completion.
+     - [x] How to verify (manual steps or command): `docker compose -f deployments/docker-compose.yml up --build` then `curl -i http://localhost:8080/healthz`
+     - [x] Expected result: Both containers are healthy/running and HTTP endpoint is reachable.
+     - [x] Logs/metrics to check (if applicable): App logs show successful DB readiness and migration completion.
 
 6. T-006 - Update developer docs and command workflow
 
@@ -93,18 +93,30 @@ links:
    - Output: Clear local runbook for DB-enabled service.
    - Linked requirements: FR-006, NFR-006, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): follow documented steps on a clean local environment.
-     - [ ] Expected result: User can reproduce startup/shutdown and troubleshoot common DB errors.
-     - [ ] Logs/metrics to check (if applicable): Documented error examples match real startup failure output.
+     - [x] How to verify (manual steps or command): follow documented steps on a clean local environment.
+     - [x] Expected result: User can reproduce startup/shutdown and troubleshoot common DB errors.
+     - [x] Logs/metrics to check (if applicable): Documented error examples match real startup failure output.
 
 7. T-007 - Execute quality gates and traceability review
    - Scope: Run full verification and confirm requirement-to-task/test traceability.
    - Output: Passing validation evidence and updated spec status decision.
    - Linked requirements: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, NFR-001, NFR-002, NFR-003, NFR-005, NFR-006
    - Validation:
-     - [ ] How to verify (manual steps or command): `go fmt ./... && go vet ./... && go list ./... && go test ./...`
-     - [ ] Expected result: All checks pass; traceability table remains complete.
-     - [ ] Logs/metrics to check (if applicable): No unexpected startup/runtime errors in smoke tests.
+     - [x] How to verify (manual steps or command): `go fmt ./... && go vet ./... && go list ./... && go test ./...`
+     - [x] Expected result: All checks pass; traceability table remains complete.
+     - [x] Logs/metrics to check (if applicable): No unexpected startup/runtime errors in smoke tests.
+
+## Validation evidence
+
+- `go fmt ./... && go vet ./... && go list ./... && go test ./...` passed.
+- `SPEC_DIR="specs/2026-02-07-postgresql-backend-service-compose" bash /Users/posen/.codex/skills/spec-driven-development/scripts/spec-lint.sh` passed.
+- `docker compose -f deployments/docker-compose.yml config` passed.
+- `docker compose -f deployments/docker-compose.yml up --build -d` started `app` + `postgres` successfully.
+- `curl -i http://localhost:8080/healthz` returned `HTTP/1.1 200 OK`.
+- `docker compose -f deployments/docker-compose.yml restart app` produced `database migrations up to date` in app logs.
+- SQL check: `app.bootstrap_metadata` has exactly one `bootstrap_version` row (`duplicate_count = 1`).
+- SQL check: `schema_migrations` reports `version = 1`, `dirty = f`.
+- `docker compose -f deployments/docker-compose.yml down` completed cleanly after smoke test.
 
 ## Traceability (optional)
 

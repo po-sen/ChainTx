@@ -3,7 +3,7 @@ doc: 01_requirements
 spec_date: 2026-02-07
 slug: postgresql-backend-service-compose
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -73,7 +73,7 @@ links:
 
 - Description: Repository must include a simple Compose setup for backend service plus PostgreSQL.
 - Acceptance criteria:
-  - [ ] AC1: `docker-compose.yml` defines at minimum `app` and `postgres` services.
+  - [ ] AC1: `deployments/docker-compose.yml` defines at minimum `app` and `postgres` services.
   - [ ] AC2: PostgreSQL service uses official image `postgres:latest`, includes a persistent volume, and defines healthcheck.
   - [ ] AC3: App service receives `DATABASE_URL` from compose and waits for PostgreSQL healthy status before startup.
 - Notes: Keep compose focused on local development.
@@ -98,7 +98,7 @@ links:
 
 ## Non-functional requirements
 
-- Performance (NFR-001): From `docker compose up --build`, service must become reachable at `http://localhost:8080/healthz` within 60 seconds on first build and within 20 seconds on subsequent starts (excluding image pull time).
+- Performance (NFR-001): From `docker compose -f deployments/docker-compose.yml up --build`, service must become reachable at `http://localhost:8080/healthz` within 60 seconds on first build and within 20 seconds on subsequent starts (excluding image pull time).
 - Availability/Reliability (NFR-002): Startup DB readiness checks must use bounded retry with total timeout <= 30 seconds, then fail fast with non-zero exit.
 - Security/Privacy (NFR-003): DB credentials must be sourced from `DATABASE_URL`; logs must never print raw credential segments from `DATABASE_URL`; committed defaults are for local development only.
 - Compliance (NFR-004): No compliance scope change in this increment; no PII schema is introduced.

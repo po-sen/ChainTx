@@ -3,7 +3,7 @@ doc: 00_problem
 spec_date: 2026-02-07
 slug: postgresql-backend-service-compose
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -34,7 +34,7 @@ links:
 ## Problem statement
 
 - Current pain: Service behavior is fully in-memory and does not exercise a real database dependency, making future persistence features risky and slower to validate.
-- Evidence or examples: Repository has no DB config, no persistence adapter, and no `docker-compose.yml` for app + database startup.
+- Evidence or examples: Repository had no DB config, no persistence adapter, and no compose deployment manifest for app + database startup.
 
 ## Goals
 
@@ -62,7 +62,7 @@ links:
 ## Success metrics
 
 - Metric: Local startup workflow
-- Target: `docker compose up --build` starts app + PostgreSQL from repo root and exposes backend HTTP on `localhost:8080`.
+- Target: `docker compose -f deployments/docker-compose.yml up --build` starts app + PostgreSQL from repo root and exposes backend HTTP on `localhost:8080`.
 - Metric: Runtime DB configuration surface
 - Target: Backend service accepts DB connection input from only one app-level variable: `DATABASE_URL`.
 - Metric: DB dependency enforcement

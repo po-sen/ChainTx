@@ -3,7 +3,7 @@ doc: 04_test_plan
 spec_date: 2026-02-07
 slug: postgresql-backend-service-compose
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -68,7 +68,7 @@ links:
 - TC-201: Compose happy-path local startup
 
   - Linked requirements: FR-005, FR-006, NFR-001, NFR-003
-  - Steps: Run `docker compose up --build`; wait for app logs; call `GET /healthz`.
+  - Steps: Run `docker compose -f deployments/docker-compose.yml up --build`; wait for app logs; call `GET /healthz`.
   - Expected: Both services run, app starts after DB readiness, and `GET /healthz` responds successfully.
 
 - TC-202: Compose DB failure path

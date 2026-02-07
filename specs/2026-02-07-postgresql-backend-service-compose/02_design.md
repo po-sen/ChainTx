@@ -3,7 +3,7 @@ doc: 02_design
 spec_date: 2026-02-07
 slug: postgresql-backend-service-compose
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -20,7 +20,7 @@ links:
 
 ## High-level approach
 
-- Summary: Add a startup-time persistence initialization use case in the application layer, backed by a PostgreSQL outbound adapter, then orchestrate both app and DB locally via `docker-compose.yml`.
+- Summary: Add a startup-time persistence initialization use case in the application layer, backed by a PostgreSQL outbound adapter, then orchestrate both app and DB locally via `deployments/docker-compose.yml`.
 - Key decisions:
   - Keep current single-module layout (`cmd/` + `internal/`) and avoid introducing bounded-context folders.
   - Use one app-level DB configuration input: `DATABASE_URL`.
@@ -37,8 +37,9 @@ links:
   - `internal/application/ports/in`: inbound port for startup persistence initialization use case.
   - `internal/application/ports/out`: outbound DB capability contracts.
   - `internal/application/use_cases`: orchestration for DB readiness + migration execution.
-  - `internal/adapters/outbound/persistence/postgresql`: DB connection, ping, migrations.
-  - `docker-compose.yml`: local app + PostgreSQL runtime topology (`postgres:latest`).
+  - `internal/adapters/outbound/persistence/postgresql`: DB connection, ping, and adapter-owned migrations.
+  - `deployments/docker-compose.yml`: local app + PostgreSQL runtime topology (`postgres:latest`).
+  - `build/package/Dockerfile`: image packaging recipe.
 - Interfaces:
   - Inbound port example: `InitializePersistenceUseCase.Execute(ctx)`.
   - Outbound port example: `PersistenceBootstrapGateway` with methods for readiness check and migrations.
@@ -47,7 +48,7 @@ links:
 ## Key flows
 
 - Flow 1: Happy path startup
-  - `docker compose up --build` starts `postgres` first.
+  - `docker compose -f deployments/docker-compose.yml up --build` starts `postgres` first.
   - App container starts, loads `DATABASE_URL`, resolves outbound adapter via DI.
   - Startup use case executes DB readiness check and migrations.
   - If successful, HTTP server starts and `GET /healthz` is reachable.
