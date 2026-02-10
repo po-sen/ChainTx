@@ -23,7 +23,7 @@ func (r *FileOpenAPISpecReadModel) Read(_ context.Context) ([]byte, string, *app
 		return nil, "", apperrors.NewInternal(
 			"OPENAPI_FILE_READ_FAILED",
 			"failed to read OpenAPI spec file",
-			map[string]string{"path": r.path},
+			map[string]any{"path": r.path},
 		)
 	}
 

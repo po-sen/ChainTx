@@ -11,7 +11,7 @@ import (
 	"chaintx/internal/application/use_cases"
 )
 
-func TestHealthController_GetHealth(t *testing.T) {
+func TestHealthControllerGetHealth(t *testing.T) {
 	controller := NewHealthController(use_cases.NewGetHealthUseCase(), log.New(io.Discard, "", 0))
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

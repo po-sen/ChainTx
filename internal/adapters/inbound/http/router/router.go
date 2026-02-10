@@ -7,8 +7,10 @@ import (
 )
 
 type Dependencies struct {
-	HealthController  *controllers.HealthController
-	SwaggerController *controllers.SwaggerController
+	HealthController          *controllers.HealthController
+	SwaggerController         *controllers.SwaggerController
+	AssetsController          *controllers.AssetsController
+	PaymentRequestsController *controllers.PaymentRequestsController
 }
 
 func New(deps Dependencies) *http.ServeMux {
@@ -18,6 +20,9 @@ func New(deps Dependencies) *http.ServeMux {
 	mux.HandleFunc("GET /swagger", deps.SwaggerController.RedirectToIndex)
 	mux.HandleFunc("GET /swagger/openapi.yaml", deps.SwaggerController.GetOpenAPISpec)
 	mux.HandleFunc("GET /swagger/", deps.SwaggerController.ServeUI)
+	mux.HandleFunc("GET /v1/assets", deps.AssetsController.ListAssets)
+	mux.HandleFunc("POST /v1/payment-requests", deps.PaymentRequestsController.CreatePaymentRequest)
+	mux.HandleFunc("GET /v1/payment-requests/{id}", deps.PaymentRequestsController.GetPaymentRequest)
 
 	return mux
 }

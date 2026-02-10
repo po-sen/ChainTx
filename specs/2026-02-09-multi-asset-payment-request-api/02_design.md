@@ -3,7 +3,7 @@ doc: 02_design
 spec_date: 2026-02-09
 slug: multi-asset-payment-request-api
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:

@@ -61,7 +61,7 @@ func (u *initializePersistenceUseCase) Execute(ctx context.Context, command dto.
 			return apperrors.NewInternal(
 				"DB_READINESS_TIMEOUT",
 				"database readiness check timed out",
-				map[string]string{
+				map[string]any{
 					"attempts":  strconv.Itoa(attempts),
 					"timeout":   command.ReadinessTimeout.String(),
 					"last_code": appErr.Code,
@@ -76,7 +76,7 @@ func (u *initializePersistenceUseCase) Execute(ctx context.Context, command dto.
 			return apperrors.NewInternal(
 				"DB_READINESS_TIMEOUT",
 				"database readiness check timed out",
-				map[string]string{
+				map[string]any{
 					"attempts": strconv.Itoa(attempts),
 					"timeout":  command.ReadinessTimeout.String(),
 				},
@@ -85,5 +85,9 @@ func (u *initializePersistenceUseCase) Execute(ctx context.Context, command dto.
 		}
 	}
 
-	return u.gateway.RunMigrations(ctx)
+	if migrationErr := u.gateway.RunMigrations(ctx); migrationErr != nil {
+		return migrationErr
+	}
+
+	return u.gateway.ValidateAssetCatalogIntegrity(ctx)
 }

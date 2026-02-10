@@ -1,6 +1,8 @@
 package router
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"log"
 	"net/http"
@@ -9,13 +11,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"chaintx/internal/adapters/inbound/http/controllers"
 	"chaintx/internal/adapters/outbound/docs"
+	"chaintx/internal/application/dto"
 	"chaintx/internal/application/use_cases"
+	apperrors "chaintx/internal/shared_kernel/errors"
 )
 
-func TestRouter_HealthAndSwaggerRoutes(t *testing.T) {
+func TestRouterHealthAndSwaggerRoutes(t *testing.T) {
 	openAPISpecPath := writeTempOpenAPISpec(t)
 	mux := newTestRouter(openAPISpecPath)
 
@@ -80,9 +85,52 @@ func TestRouter_HealthAndSwaggerRoutes(t *testing.T) {
 			t.Fatalf("expected openapi version 3.0.3 in body, got %s", rec.Body.String())
 		}
 	})
+
+	t.Run("assets route returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/assets", nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"assets"`) {
+			t.Fatalf("expected assets payload, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("create payment request route returns 201", func(t *testing.T) {
+		body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/payment-requests", body)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected status 201, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Location") == "" {
+			t.Fatalf("expected Location header")
+		}
+	})
+
+	t.Run("get payment request route returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/payment-requests/pr_test", nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"id":"pr_test"`) {
+			t.Fatalf("expected payment request id in body, got %s", rec.Body.String())
+		}
+	})
 }
 
-func TestRouter_HealthzRejectsNonGET(t *testing.T) {
+func TestRouterHealthzRejectsNonGET(t *testing.T) {
 	openAPISpecPath := writeTempOpenAPISpec(t)
 	mux := newTestRouter(openAPISpecPath)
 
@@ -103,9 +151,18 @@ func newTestRouter(openAPISpecPath string) *http.ServeMux {
 	openAPIReadModel := docs.NewFileOpenAPISpecReadModel(openAPISpecPath)
 	openAPIUseCase := use_cases.NewGetOpenAPISpecUseCase(openAPIReadModel)
 
+	assetsController := controllers.NewAssetsController(stubListAssetsUseCase{}, logger)
+	paymentRequestsController := controllers.NewPaymentRequestsController(
+		stubCreatePaymentRequestUseCase{},
+		stubGetPaymentRequestUseCase{},
+		logger,
+	)
+
 	return New(Dependencies{
-		HealthController:  controllers.NewHealthController(healthUseCase, logger),
-		SwaggerController: controllers.NewSwaggerController(openAPIUseCase, logger),
+		HealthController:          controllers.NewHealthController(healthUseCase, logger),
+		SwaggerController:         controllers.NewSwaggerController(openAPIUseCase, logger),
+		AssetsController:          assetsController,
+		PaymentRequestsController: paymentRequestsController,
 	})
 }
 
@@ -121,4 +178,54 @@ func writeTempOpenAPISpec(t *testing.T) string {
 	}
 
 	return path
+}
+
+type stubListAssetsUseCase struct{}
+
+func (stubListAssetsUseCase) Execute(_ context.Context, _ dto.ListAssetsQuery) (dto.ListAssetsOutput, *apperrors.AppError) {
+	return dto.ListAssetsOutput{Assets: []dto.AssetCatalogEntry{}}, nil
+}
+
+type stubCreatePaymentRequestUseCase struct{}
+
+func (stubCreatePaymentRequestUseCase) Execute(_ context.Context, _ dto.CreatePaymentRequestCommand) (dto.CreatePaymentRequestOutput, *apperrors.AppError) {
+	createdAt := time.Unix(0, 0).UTC()
+	expiresAt := createdAt.Add(1 * time.Hour)
+	return dto.CreatePaymentRequestOutput{
+		Resource: dto.PaymentRequestResource{
+			ID:        "pr_test",
+			Status:    "pending",
+			Chain:     "bitcoin",
+			Network:   "mainnet",
+			Asset:     "BTC",
+			CreatedAt: createdAt,
+			ExpiresAt: expiresAt,
+			PaymentInstructions: dto.PaymentInstructions{
+				Address:         "bc1qexample",
+				AddressScheme:   "bip84_p2wpkh",
+				DerivationIndex: 1,
+			},
+		},
+	}, nil
+}
+
+type stubGetPaymentRequestUseCase struct{}
+
+func (stubGetPaymentRequestUseCase) Execute(_ context.Context, query dto.GetPaymentRequestQuery) (dto.PaymentRequestResource, *apperrors.AppError) {
+	createdAt := time.Unix(0, 0).UTC()
+	expiresAt := createdAt.Add(1 * time.Hour)
+	return dto.PaymentRequestResource{
+		ID:        query.ID,
+		Status:    "pending",
+		Chain:     "bitcoin",
+		Network:   "mainnet",
+		Asset:     "BTC",
+		CreatedAt: createdAt,
+		ExpiresAt: expiresAt,
+		PaymentInstructions: dto.PaymentInstructions{
+			Address:         "bc1qexample",
+			AddressScheme:   "bip84_p2wpkh",
+			DerivationIndex: 1,
+		},
+	}, nil
 }

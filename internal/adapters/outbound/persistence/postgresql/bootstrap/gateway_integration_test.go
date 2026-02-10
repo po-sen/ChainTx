@@ -1,6 +1,6 @@
 //go:build integration
 
-package postgresql
+package bootstrap
 
 import (
 	"context"
@@ -15,15 +15,15 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func TestPersistenceBootstrapGateway_Integration(t *testing.T) {
+func TestPersistenceBootstrapGatewayIntegration(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set TEST_DATABASE_URL to run integration test")
 	}
 
 	logger := log.New(io.Discard, "", 0)
-	migrationsPath := filepath.Join("migrations")
-	gateway := NewPersistenceBootstrapGateway(databaseURL, "integration-target", migrationsPath, logger)
+	migrationsPath := filepath.Join("..", "migrations")
+	gateway := NewGateway(databaseURL, "integration-target", migrationsPath, logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -34,6 +34,10 @@ func TestPersistenceBootstrapGateway_Integration(t *testing.T) {
 
 	if appErr := gateway.RunMigrations(ctx); appErr != nil {
 		t.Fatalf("expected first migration run success, got %v", appErr)
+	}
+
+	if appErr := gateway.ValidateAssetCatalogIntegrity(ctx); appErr != nil {
+		t.Fatalf("expected asset catalog integrity validation success, got %v", appErr)
 	}
 
 	if appErr := gateway.RunMigrations(ctx); appErr != nil {
@@ -60,5 +64,13 @@ func TestPersistenceBootstrapGateway_Integration(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one bootstrap_version row, got %d", count)
+	}
+
+	var assetCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM app.asset_catalog WHERE enabled = TRUE").Scan(&assetCount); err != nil {
+		t.Fatalf("failed to count enabled assets: %v", err)
+	}
+	if assetCount < 3 {
+		t.Fatalf("expected at least 3 enabled assets, got %d", assetCount)
 	}
 }

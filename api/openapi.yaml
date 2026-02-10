@@ -2,7 +2,8 @@ openapi: 3.0.3
 info:
   title: ChainTx Service API
   version: 1.0.0
-  description: Minimal API surface for service bootstrap and health checking.
+  description: |
+    ChainTx backend APIs for health checks and multi-asset payment request creation.
 servers:
   - url: http://localhost:8080
 paths:
@@ -25,3 +26,376 @@ paths:
                   status:
                     type: string
                     example: ok
+
+  /v1/assets:
+    get:
+      summary: List enabled chain/network/asset metadata
+      operationId: listAssets
+      tags:
+        - payments
+      responses:
+        "200":
+          description: Enabled assets and metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetListResponse'
+              examples:
+                default:
+                  value:
+                    assets:
+                      - chain: bitcoin
+                        network: mainnet
+                        asset: BTC
+                        minor_unit: sats
+                        decimals: 8
+                        address_scheme: bip84_p2wpkh
+                        default_expires_in_seconds: 3600
+                      - chain: ethereum
+                        network: mainnet
+                        asset: ETH
+                        minor_unit: wei
+                        decimals: 18
+                        address_scheme: evm_bip44
+                        chain_id: 1
+                        default_expires_in_seconds: 3600
+                      - chain: ethereum
+                        network: mainnet
+                        asset: USDT
+                        minor_unit: token_minor
+                        decimals: 6
+                        token_standard: ERC20
+                        token_contract: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+                        token_decimals: 6
+                        address_scheme: evm_bip44
+                        chain_id: 1
+                        default_expires_in_seconds: 3600
+
+  /v1/payment-requests:
+    post:
+      summary: Create payment request
+      operationId: createPaymentRequest
+      tags:
+        - payments
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: |
+            Idempotency key used to replay create requests safely.
+            First successful create returns 201; replay with same canonical payload returns 200.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequestRequest'
+            examples:
+              btc:
+                value:
+                  chain: bitcoin
+                  network: mainnet
+                  asset: BTC
+                  expected_amount_minor: "150000"
+                  expires_in_seconds: 3600
+                  metadata:
+                    order_id: A123
+              eth:
+                value:
+                  chain: ethereum
+                  network: mainnet
+                  asset: ETH
+                  expected_amount_minor: "10000000000000000"
+                  metadata:
+                    order_id: E1001
+              usdt:
+                value:
+                  chain: ethereum
+                  network: mainnet
+                  asset: USDT
+                  expected_amount_minor: "2500000"
+                  metadata:
+                    order_id: U2002
+      responses:
+        "201":
+          description: Created (first write)
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Canonical resource location
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequestResponse'
+        "200":
+          description: Idempotent replay
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Canonical resource location
+            X-Idempotency-Replayed:
+              schema:
+                type: string
+                example: "true"
+              description: Present when the response is replayed from prior successful create
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequestResponse'
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_request:
+                  value:
+                    error:
+                      code: invalid_request
+                      message: expires_in_seconds must be between 60 and 2592000
+                      details:
+                        field: expires_in_seconds
+                unsupported_asset:
+                  value:
+                    error:
+                      code: unsupported_asset
+                      message: asset is not supported for the selected chain and network
+                      details:
+                        chain: bitcoin
+                        network: mainnet
+                        asset: USDT
+        "409":
+          description: Idempotency key conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                idempotency_key_conflict:
+                  value:
+                    error:
+                      code: idempotency_key_conflict
+                      message: Idempotency key reused with different request payload
+                      details:
+                        idempotency_key: abc-123
+
+  /v1/payment-requests/{id}:
+    get:
+      summary: Get payment request by id
+      operationId: getPaymentRequest
+      tags:
+        - payments
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment request resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequestResponse'
+        "404":
+          description: Payment request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                payment_request_not_found:
+                  value:
+                    error:
+                      code: payment_request_not_found
+                      message: payment request was not found
+                      details:
+                        id: pr_missing
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+    AssetListResponse:
+      type: object
+      required:
+        - assets
+      properties:
+        assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssetCatalogEntry'
+
+    AssetCatalogEntry:
+      type: object
+      required:
+        - chain
+        - network
+        - asset
+        - minor_unit
+        - decimals
+        - address_scheme
+        - default_expires_in_seconds
+      properties:
+        chain:
+          type: string
+          example: bitcoin
+        network:
+          type: string
+          example: mainnet
+        asset:
+          type: string
+          example: BTC
+        minor_unit:
+          type: string
+          example: sats
+        decimals:
+          type: integer
+          description: Major-unit decimal exponent (BTC=8, ETH=18, USDT=6)
+          example: 8
+        address_scheme:
+          type: string
+          example: bip84_p2wpkh
+        default_expires_in_seconds:
+          type: integer
+          minimum: 60
+          maximum: 2592000
+          example: 3600
+        chain_id:
+          type: integer
+          format: int64
+          example: 1
+        token_standard:
+          type: string
+          example: ERC20
+        token_contract:
+          type: string
+          example: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+        token_decimals:
+          type: integer
+          example: 6
+
+    CreatePaymentRequestRequest:
+      type: object
+      required:
+        - chain
+        - network
+        - asset
+      properties:
+        chain:
+          type: string
+          example: bitcoin
+        network:
+          type: string
+          example: mainnet
+        asset:
+          type: string
+          example: BTC
+        expected_amount_minor:
+          type: string
+          pattern: '^[0-9]{1,78}$'
+          example: "150000"
+        expires_in_seconds:
+          type: integer
+          minimum: 60
+          maximum: 2592000
+          example: 3600
+        metadata:
+          type: object
+          additionalProperties: true
+
+    PaymentRequestResponse:
+      type: object
+      required:
+        - id
+        - status
+        - chain
+        - network
+        - asset
+        - expires_at
+        - created_at
+        - payment_instructions
+      properties:
+        id:
+          type: string
+          example: pr_5fd7279523aa31ef6bb8017f
+        status:
+          type: string
+          description: Extensible lifecycle status. v1 currently emits `pending`.
+          example: pending
+        chain:
+          type: string
+          example: bitcoin
+        network:
+          type: string
+          example: mainnet
+        asset:
+          type: string
+          example: BTC
+        expected_amount_minor:
+          type: string
+          pattern: '^[0-9]{1,78}$'
+          example: "150000"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: false
+        created_at:
+          type: string
+          format: date-time
+        payment_instructions:
+          $ref: '#/components/schemas/PaymentInstructions'
+
+    PaymentInstructions:
+      type: object
+      required:
+        - address
+        - address_scheme
+        - derivation_index
+      properties:
+        address:
+          type: string
+          example: bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
+        address_scheme:
+          type: string
+          example: bip84_p2wpkh
+        derivation_index:
+          type: integer
+          format: int64
+          example: 42
+        chain_id:
+          type: integer
+          format: int64
+          example: 1
+        token_standard:
+          type: string
+          example: ERC20
+        token_contract:
+          type: string
+          example: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+        token_decimals:
+          type: integer
+          example: 6

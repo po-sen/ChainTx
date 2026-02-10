@@ -7,7 +7,7 @@ import (
 	"chaintx/internal/application/dto"
 )
 
-func TestGetHealthUseCase_Execute(t *testing.T) {
+func TestGetHealthUseCaseExecute(t *testing.T) {
 	useCase := NewGetHealthUseCase()
 
 	output, appErr := useCase.Execute(context.Background(), dto.GetHealthCommand{})

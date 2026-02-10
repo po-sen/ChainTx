@@ -21,6 +21,14 @@ func main() {
 	}
 
 	container := di.Build(cfg, logger)
+	defer func() {
+		if container.Database == nil {
+			return
+		}
+		if err := container.Database.Close(); err != nil {
+			logger.Printf("database close warning error=%v", err)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -35,7 +43,7 @@ func main() {
 			"persistence initialization failed code=%s message=%s metadata=%v",
 			persistenceErr.Code,
 			persistenceErr.Message,
-			persistenceErr.Metadata,
+			persistenceErr.Details,
 		)
 		os.Exit(1)
 	}

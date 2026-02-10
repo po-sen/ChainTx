@@ -8,10 +8,13 @@ import (
 )
 
 type errorResponse struct {
-	Type     string            `json:"type"`
-	Code     string            `json:"code"`
-	Message  string            `json:"message"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Error errorEnvelope `json:"error"`
+}
+
+type errorEnvelope struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -27,12 +30,15 @@ func writeAppError(w http.ResponseWriter, appErr *apperrors.AppError) {
 		status = http.StatusBadRequest
 	case apperrors.TypeNotFound:
 		status = http.StatusNotFound
+	case apperrors.TypeConflict:
+		status = http.StatusConflict
 	}
 
 	writeJSON(w, status, errorResponse{
-		Type:     string(appErr.Type),
-		Code:     appErr.Code,
-		Message:  appErr.Message,
-		Metadata: appErr.Metadata,
+		Error: errorEnvelope{
+			Code:    appErr.Code,
+			Message: appErr.Message,
+			Details: appErr.Details,
+		},
 	})
 }

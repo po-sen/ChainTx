@@ -9,7 +9,7 @@ import (
 	apperrors "chaintx/internal/shared_kernel/errors"
 )
 
-func TestInitializePersistenceUseCase_Execute_Success(t *testing.T) {
+func TestInitializePersistenceUseCaseExecuteSuccess(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{}
 	useCase := NewInitializePersistenceUseCase(fakeGateway)
 
@@ -29,9 +29,13 @@ func TestInitializePersistenceUseCase_Execute_Success(t *testing.T) {
 	if fakeGateway.migrationRuns != 1 {
 		t.Fatalf("expected one migration run, got %d", fakeGateway.migrationRuns)
 	}
+
+	if fakeGateway.validationRuns != 1 {
+		t.Fatalf("expected one validation run, got %d", fakeGateway.validationRuns)
+	}
 }
 
-func TestInitializePersistenceUseCase_Execute_RetryThenSuccess(t *testing.T) {
+func TestInitializePersistenceUseCaseExecuteRetryThenSuccess(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{
 		readinessErrors: []*apperrors.AppError{
 			apperrors.NewInternal("DB_CONNECT_FAILED", "failed", nil),
@@ -54,7 +58,7 @@ func TestInitializePersistenceUseCase_Execute_RetryThenSuccess(t *testing.T) {
 	}
 }
 
-func TestInitializePersistenceUseCase_Execute_ReadinessTimeout(t *testing.T) {
+func TestInitializePersistenceUseCaseExecuteReadinessTimeout(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{
 		readinessErrors: []*apperrors.AppError{
 			apperrors.NewInternal("DB_CONNECT_FAILED", "failed", nil),
@@ -78,9 +82,13 @@ func TestInitializePersistenceUseCase_Execute_ReadinessTimeout(t *testing.T) {
 	if fakeGateway.migrationRuns != 0 {
 		t.Fatalf("expected migrations not to run on timeout, got %d", fakeGateway.migrationRuns)
 	}
+
+	if fakeGateway.validationRuns != 0 {
+		t.Fatalf("expected validation not to run on timeout, got %d", fakeGateway.validationRuns)
+	}
 }
 
-func TestInitializePersistenceUseCase_Execute_MigrationFailure(t *testing.T) {
+func TestInitializePersistenceUseCaseExecuteMigrationFailure(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{
 		runMigrationErr: apperrors.NewInternal("DB_MIGRATION_APPLY_FAILED", "failed", nil),
 	}
@@ -98,9 +106,33 @@ func TestInitializePersistenceUseCase_Execute_MigrationFailure(t *testing.T) {
 	if appErr.Code != "DB_MIGRATION_APPLY_FAILED" {
 		t.Fatalf("expected DB_MIGRATION_APPLY_FAILED, got %s", appErr.Code)
 	}
+
+	if fakeGateway.validationRuns != 0 {
+		t.Fatalf("expected validation not to run on migration failure, got %d", fakeGateway.validationRuns)
+	}
 }
 
-func TestInitializePersistenceUseCase_Execute_InvalidCommand(t *testing.T) {
+func TestInitializePersistenceUseCaseExecuteValidationFailure(t *testing.T) {
+	fakeGateway := &fakePersistenceGateway{
+		validateCatalogErr: apperrors.NewInternal("ASSET_CATALOG_INVALID", "failed", nil),
+	}
+	useCase := NewInitializePersistenceUseCase(fakeGateway)
+
+	appErr := useCase.Execute(context.Background(), dto.InitializePersistenceCommand{
+		ReadinessTimeout:       50 * time.Millisecond,
+		ReadinessRetryInterval: 5 * time.Millisecond,
+	})
+
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+
+	if appErr.Code != "ASSET_CATALOG_INVALID" {
+		t.Fatalf("expected ASSET_CATALOG_INVALID, got %s", appErr.Code)
+	}
+}
+
+func TestInitializePersistenceUseCaseExecuteInvalidCommand(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{}
 	useCase := NewInitializePersistenceUseCase(fakeGateway)
 
@@ -115,10 +147,12 @@ func TestInitializePersistenceUseCase_Execute_InvalidCommand(t *testing.T) {
 }
 
 type fakePersistenceGateway struct {
-	readinessErrors []*apperrors.AppError
-	runMigrationErr *apperrors.AppError
-	readinessChecks int
-	migrationRuns   int
+	readinessErrors    []*apperrors.AppError
+	runMigrationErr    *apperrors.AppError
+	validateCatalogErr *apperrors.AppError
+	readinessChecks    int
+	migrationRuns      int
+	validationRuns     int
 }
 
 func (f *fakePersistenceGateway) CheckReadiness(_ context.Context) *apperrors.AppError {
@@ -139,4 +173,9 @@ func (f *fakePersistenceGateway) CheckReadiness(_ context.Context) *apperrors.Ap
 func (f *fakePersistenceGateway) RunMigrations(_ context.Context) *apperrors.AppError {
 	f.migrationRuns++
 	return f.runMigrationErr
+}
+
+func (f *fakePersistenceGateway) ValidateAssetCatalogIntegrity(_ context.Context) *apperrors.AppError {
+	f.validationRuns++
+	return f.validateCatalogErr
 }

@@ -2,7 +2,7 @@ package bootstrap
 
 import "testing"
 
-func TestLoadConfig_Defaults(t *testing.T) {
+func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
 	t.Setenv("PORT", "")
 	t.Setenv("OPENAPI_SPEC_PATH", "")
@@ -25,7 +25,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_RequiresDatabaseURL(t *testing.T) {
+func TestLoadConfigRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 
 	_, cfgErr := LoadConfig()
@@ -38,7 +38,7 @@ func TestLoadConfig_RequiresDatabaseURL(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_RejectsInvalidScheme(t *testing.T) {
+func TestLoadConfigRejectsInvalidScheme(t *testing.T) {
 	t.Setenv("DATABASE_URL", "mysql://localhost:3306/chaintx")
 
 	_, cfgErr := LoadConfig()
