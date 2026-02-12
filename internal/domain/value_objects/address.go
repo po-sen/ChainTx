@@ -11,7 +11,7 @@ import (
 
 var (
 	evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
-	btcBech32Pattern  = regexp.MustCompile(`^bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{11,87}$`)
+	btcBech32Pattern  = regexp.MustCompile(`^(bc1|tb1|bcrt1)[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{11,87}$`)
 	btcBase58Pattern  = regexp.MustCompile(`^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{26,35}$`)
 )
 
@@ -37,7 +37,7 @@ func NormalizeAddressForStorage(chain, address string) (string, *apperrors.AppEr
 		return "0x" + strings.ToLower(strings.TrimPrefix(trimmed, "0x")), nil
 	case "bitcoin":
 		lower := strings.ToLower(trimmed)
-		if strings.HasPrefix(lower, "bc1") {
+		if strings.HasPrefix(lower, "bc1") || strings.HasPrefix(lower, "tb1") || strings.HasPrefix(lower, "bcrt1") {
 			if !btcBech32Pattern.MatchString(lower) {
 				return "", apperrors.NewValidation(
 					"invalid_request",

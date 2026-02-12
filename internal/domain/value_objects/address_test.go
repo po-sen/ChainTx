@@ -1,3 +1,5 @@
+//go:build !integration
+
 package valueobjects
 
 import "testing"
@@ -39,5 +41,25 @@ func TestNormalizeAddressForStorageBitcoinBech32Lowercase(t *testing.T) {
 	}
 	if canonical != "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7k7gt080" {
 		t.Fatalf("expected lowercase bech32 canonical, got %s", canonical)
+	}
+}
+
+func TestNormalizeAddressForStorageBitcoinAcceptsTestnetBech32(t *testing.T) {
+	canonical, appErr := NormalizeAddressForStorage("bitcoin", "tb1qfm5r0m9fxxv3x47clz9k2zk5f4d4f0htptf0kr")
+	if appErr != nil {
+		t.Fatalf("expected no error, got %+v", appErr)
+	}
+	if canonical != "tb1qfm5r0m9fxxv3x47clz9k2zk5f4d4f0htptf0kr" {
+		t.Fatalf("unexpected canonical address: %s", canonical)
+	}
+}
+
+func TestNormalizeAddressForStorageBitcoinAcceptsRegtestBech32(t *testing.T) {
+	canonical, appErr := NormalizeAddressForStorage("bitcoin", "bcrt1qfm5r0m9fxxv3x47clz9k2zk5f4d4f0htptf0kr")
+	if appErr != nil {
+		t.Fatalf("expected no error, got %+v", appErr)
+	}
+	if canonical != "bcrt1qfm5r0m9fxxv3x47clz9k2zk5f4d4f0htptf0kr" {
+		t.Fatalf("unexpected canonical address: %s", canonical)
 	}
 }

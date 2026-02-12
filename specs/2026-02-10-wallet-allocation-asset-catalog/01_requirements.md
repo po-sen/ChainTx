@@ -3,7 +3,7 @@ doc: 01_requirements
 spec_date: 2026-02-10
 slug: wallet-allocation-asset-catalog
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -53,7 +53,7 @@ links:
 - Acceptance criteria:
   - [ ] AC1: Startup loads enabled `asset_catalog` rows and verifies referenced wallet account exists and is active.
   - [ ] AC2: Startup verifies allocator compatibility rules (chain/network consistency, EVM `chain_id` presence, and token/native metadata invariants).
-  - [ ] AC3: Address-scheme allow-list is enforced from one centralized validation ruleset (bootstrap/config) with current values: Bitcoin -> `bip84_p2wpkh`; EVM -> `evm_bip44`.
+  - [ ] AC3: Address-scheme allow-list is enforced from one centralized validation ruleset (`infrastructure/config`) with current values: Bitcoin -> `bip84_p2wpkh`; EVM -> `evm_bip44`.
   - [ ] AC4: Startup enforces keyset depth policy by chain:
     - Bitcoin keyset must be account-level BIP84 (`m/84'/coin_type'/account'` completed before xpub export)
     - EVM keyset must be account-level BIP44 (`m/44'/60'/account'` completed before xpub export)

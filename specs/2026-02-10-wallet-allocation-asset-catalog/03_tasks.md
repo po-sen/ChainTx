@@ -3,7 +3,7 @@ doc: 03_tasks
 spec_date: 2026-02-10
 slug: wallet-allocation-asset-catalog
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:

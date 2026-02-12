@@ -8,19 +8,28 @@ import (
 	"syscall"
 
 	"chaintx/internal/application/dto"
-	"chaintx/internal/bootstrap"
-	"chaintx/internal/bootstrap/di"
+	"chaintx/internal/infrastructure/config"
+	"chaintx/internal/infrastructure/di"
 )
 
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)
-	cfg, cfgErr := bootstrap.LoadConfig()
+	cfg, cfgErr := config.LoadConfig()
 	if cfgErr != nil {
 		logger.Printf("startup config error code=%s message=%s metadata=%v", cfgErr.Code, cfgErr.Message, cfgErr.Metadata)
 		os.Exit(1)
 	}
+	logger.Printf(
+		"wallet allocation config mode=%s devtest_allow_mainnet=%t",
+		cfg.AllocationMode,
+		cfg.DevtestAllowMainnet,
+	)
 
-	container := di.Build(cfg, logger)
+	container, buildErr := di.Build(cfg, logger)
+	if buildErr != nil {
+		logger.Printf("dependency wiring error: %v", buildErr)
+		os.Exit(1)
+	}
 	defer func() {
 		if container.Database == nil {
 			return

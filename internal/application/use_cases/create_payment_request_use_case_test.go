@@ -1,3 +1,5 @@
+//go:build !integration
+
 package use_cases
 
 import (
@@ -7,6 +9,7 @@ import (
 	"time"
 
 	"chaintx/internal/application/dto"
+	portsout "chaintx/internal/application/ports/out"
 	apperrors "chaintx/internal/shared_kernel/errors"
 )
 
@@ -53,8 +56,13 @@ func TestCreatePaymentRequestUseCaseExecuteSuccessWithDefaults(t *testing.T) {
 			Replayed: false,
 		},
 	}
+	walletGateway := &fakeWalletAllocationGateway{
+		result: portsout.DerivedAddress{
+			AddressRaw: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+		},
+	}
 
-	useCase := NewCreatePaymentRequestUseCase(readModel, repository, clock)
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, clock)
 	output, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
 		Chain:   "Bitcoin",
 		Network: "Mainnet",
@@ -70,6 +78,9 @@ func TestCreatePaymentRequestUseCaseExecuteSuccessWithDefaults(t *testing.T) {
 	if repository.createCalls != 1 {
 		t.Fatalf("expected one create call, got %d", repository.createCalls)
 	}
+	if walletGateway.deriveCalls != 1 {
+		t.Fatalf("expected one derive call, got %d", walletGateway.deriveCalls)
+	}
 }
 
 func TestCreatePaymentRequestUseCaseExecuteUnsupportedAsset(t *testing.T) {
@@ -77,7 +88,7 @@ func TestCreatePaymentRequestUseCaseExecuteUnsupportedAsset(t *testing.T) {
 		entries: []dto.AssetCatalogEntry{
 			{Chain: "bitcoin", Network: "mainnet", Asset: "BTC", DefaultExpiresInSeconds: 3600},
 		},
-	}, &fakePaymentRequestRepository{}, fixedClock{now: time.Now().UTC()})
+	}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
 
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
 		Chain:   "bitcoin",
@@ -94,7 +105,7 @@ func TestCreatePaymentRequestUseCaseExecuteUnsupportedAsset(t *testing.T) {
 
 func TestCreatePaymentRequestUseCaseExecuteExpectedAmountValidation(t *testing.T) {
 	amount := "1.25"
-	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
 
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
 		Chain:               "bitcoin",
@@ -111,7 +122,7 @@ func TestCreatePaymentRequestUseCaseExecuteExpectedAmountValidation(t *testing.T
 }
 
 func TestCreatePaymentRequestUseCaseExecuteMetadataTooLarge(t *testing.T) {
-	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
 
 	metadata := map[string]any{
 		"blob": strings.Repeat("a", 5000),
@@ -127,6 +138,45 @@ func TestCreatePaymentRequestUseCaseExecuteMetadataTooLarge(t *testing.T) {
 	}
 	if appErr.Code != "invalid_request" {
 		t.Fatalf("expected invalid_request, got %s", appErr.Code)
+	}
+}
+
+func TestCreatePaymentRequestUseCaseExecuteRejectsGatewayMetadataMismatch(t *testing.T) {
+	readModel := fakeAssetCatalogReadModel{
+		entries: []dto.AssetCatalogEntry{
+			{
+				Chain:                   "ethereum",
+				Network:                 "sepolia",
+				Asset:                   "ETH",
+				MinorUnit:               "wei",
+				Decimals:                18,
+				AddressScheme:           "evm_bip44",
+				DefaultExpiresInSeconds: 3600,
+				WalletAccountID:         "wa_eth",
+				ChainID:                 int64Ptr(11155111),
+			},
+		},
+	}
+	repository := &fakePaymentRequestRepository{}
+	walletGateway := &fakeWalletAllocationGateway{
+		result: portsout.DerivedAddress{
+			AddressRaw:    "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+			AddressScheme: "bip84_p2wpkh", // mismatched on purpose
+			ChainID:       int64Ptr(1),
+		},
+	}
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()})
+
+	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
+		Chain:   "ethereum",
+		Network: "sepolia",
+		Asset:   "ETH",
+	})
+	if appErr == nil {
+		t.Fatalf("expected invalid configuration error")
+	}
+	if appErr.Code != "invalid_configuration" {
+		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
 	}
 }
 
@@ -184,10 +234,25 @@ type fakePaymentRequestRepository struct {
 	createCalls int
 }
 
-func (f *fakePaymentRequestRepository) Create(_ context.Context, command dto.CreatePaymentRequestPersistenceCommand) (dto.CreatePaymentRequestPersistenceResult, *apperrors.AppError) {
+func (f *fakePaymentRequestRepository) Create(
+	_ context.Context,
+	command dto.CreatePaymentRequestPersistenceCommand,
+	resolveAddress dto.ResolvePaymentAddressFunc,
+) (dto.CreatePaymentRequestPersistenceResult, *apperrors.AppError) {
 	f.createCalls++
 	if f.onCreate != nil {
 		f.onCreate(command)
+	}
+	if _, resolveErr := resolveAddress(context.Background(), dto.ResolvePaymentAddressInput{
+		Chain:                  command.Chain,
+		Network:                command.Network,
+		AddressScheme:          command.AssetCatalogSnapshot.AddressScheme,
+		KeysetID:               "ks_test",
+		DerivationPathTemplate: "0/{index}",
+		DerivationIndex:        0,
+		ChainID:                command.AssetCatalogSnapshot.ChainID,
+	}); resolveErr != nil {
+		return dto.CreatePaymentRequestPersistenceResult{}, resolveErr
 	}
 	if f.appErr != nil {
 		return dto.CreatePaymentRequestPersistenceResult{}, f.appErr
@@ -199,10 +264,35 @@ func (f *fakePaymentRequestRepository) Create(_ context.Context, command dto.Cre
 	return f.result, nil
 }
 
+type fakeWalletAllocationGateway struct {
+	onDerive    func(input portsout.DeriveAddressInput)
+	result      portsout.DerivedAddress
+	appErr      *apperrors.AppError
+	deriveCalls int
+}
+
+func (f *fakeWalletAllocationGateway) DeriveAddress(_ context.Context, input portsout.DeriveAddressInput) (portsout.DerivedAddress, *apperrors.AppError) {
+	f.deriveCalls++
+	if f.onDerive != nil {
+		f.onDerive(input)
+	}
+	if f.appErr != nil {
+		return portsout.DerivedAddress{}, f.appErr
+	}
+	if f.result.AddressRaw == "" {
+		f.result.AddressRaw = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+	}
+	return f.result, nil
+}
+
 type fixedClock struct {
 	now time.Time
 }
 
 func (f fixedClock) NowUTC() time.Time {
 	return f.now.UTC()
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }

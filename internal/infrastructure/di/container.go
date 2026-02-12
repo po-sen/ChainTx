@@ -2,7 +2,10 @@ package di
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"strings"
+	"sync"
 
 	"chaintx/internal/adapters/inbound/http/controllers"
 	httpRouter "chaintx/internal/adapters/inbound/http/router"
@@ -11,10 +14,12 @@ import (
 	postgresqlbootstrap "chaintx/internal/adapters/outbound/persistence/postgresql/bootstrap"
 	postgresqlpaymentrequest "chaintx/internal/adapters/outbound/persistence/postgresql/paymentrequest"
 	postgresqlshared "chaintx/internal/adapters/outbound/persistence/postgresql/shared"
-	deterministicwallet "chaintx/internal/adapters/outbound/wallet/deterministic"
+	devtestwallet "chaintx/internal/adapters/outbound/wallet/devtest"
+	prodwallet "chaintx/internal/adapters/outbound/wallet/prod"
 	portsin "chaintx/internal/application/ports/in"
+	portsout "chaintx/internal/application/ports/out"
 	"chaintx/internal/application/use_cases"
-	"chaintx/internal/bootstrap"
+	"chaintx/internal/infrastructure/config"
 	"chaintx/internal/infrastructure/httpserver"
 )
 
@@ -24,7 +29,39 @@ type Container struct {
 	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
 }
 
-func Build(cfg bootstrap.Config, logger *log.Logger) Container {
+type WalletGatewayBuilder func(cfg config.Config, logger *log.Logger) portsout.WalletAllocationGateway
+
+var walletGatewayBuilders = map[string]WalletGatewayBuilder{
+	"devtest": func(cfg config.Config, logger *log.Logger) portsout.WalletAllocationGateway {
+		return devtestwallet.NewGateway(devtestwallet.Config{
+			AllowMainnet: cfg.DevtestAllowMainnet,
+			Keysets:      cfg.DevtestKeysets,
+		}, logger)
+	},
+	"prod": func(_ config.Config, _ *log.Logger) portsout.WalletAllocationGateway {
+		return prodwallet.NewGateway()
+	},
+}
+
+var walletGatewayBuildersMu sync.RWMutex
+
+func RegisterWalletGatewayBuilder(mode string, builder WalletGatewayBuilder) {
+	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	if normalizedMode == "" || builder == nil {
+		return
+	}
+
+	walletGatewayBuildersMu.Lock()
+	defer walletGatewayBuildersMu.Unlock()
+	walletGatewayBuilders[normalizedMode] = builder
+}
+
+func Build(cfg config.Config, logger *log.Logger) (Container, error) {
+	walletGateway, buildErr := buildWalletGateway(cfg, logger)
+	if buildErr != nil {
+		return Container{}, buildErr
+	}
+
 	healthUseCase := use_cases.NewGetHealthUseCase()
 	openAPIReadModel := docs.NewFileOpenAPISpecReadModel(cfg.OpenAPISpecPath)
 	openAPIUseCase := use_cases.NewGetOpenAPISpecUseCase(openAPIReadModel)
@@ -32,20 +69,26 @@ func Build(cfg bootstrap.Config, logger *log.Logger) Container {
 		cfg.DatabaseURL,
 		cfg.DatabaseTarget,
 		cfg.MigrationsPath,
+		postgresqlbootstrap.ValidationRules{
+			AllocationMode:         cfg.AllocationMode,
+			DevtestAllowMainnet:    cfg.DevtestAllowMainnet,
+			DevtestKeysets:         cfg.DevtestKeysets,
+			AddressSchemeAllowList: cfg.AddressSchemeAllowList,
+		},
 		logger,
 	)
 	initializePersistenceUseCase := use_cases.NewInitializePersistenceUseCase(persistenceGateway)
 	databasePool := postgresqlshared.NewDatabasePool(cfg.DatabaseURL, logger)
 
 	assetCatalogReadModel := postgresqlassetcatalog.NewReadModel(databasePool)
-	paymentAddressAllocator := deterministicwallet.NewPaymentAddressAllocator()
-	paymentRequestRepository := postgresqlpaymentrequest.NewRepository(databasePool, paymentAddressAllocator, logger)
+	paymentRequestRepository := postgresqlpaymentrequest.NewRepository(databasePool, logger)
 	paymentRequestReadModel := postgresqlpaymentrequest.NewReadModel(databasePool)
 
 	listAssetsUseCase := use_cases.NewListAssetsUseCase(assetCatalogReadModel)
 	createPaymentRequestUseCase := use_cases.NewCreatePaymentRequestUseCase(
 		assetCatalogReadModel,
 		paymentRequestRepository,
+		walletGateway,
 		use_cases.NewSystemClock(),
 	)
 	getPaymentRequestUseCase := use_cases.NewGetPaymentRequestUseCase(paymentRequestReadModel)
@@ -72,5 +115,18 @@ func Build(cfg bootstrap.Config, logger *log.Logger) Container {
 		Database:                     databasePool,
 		Server:                       server,
 		InitializePersistenceUseCase: initializePersistenceUseCase,
+	}, nil
+}
+
+func buildWalletGateway(cfg config.Config, logger *log.Logger) (portsout.WalletAllocationGateway, error) {
+	mode := strings.ToLower(strings.TrimSpace(cfg.AllocationMode))
+
+	walletGatewayBuildersMu.RLock()
+	builder, exists := walletGatewayBuilders[mode]
+	walletGatewayBuildersMu.RUnlock()
+	if !exists {
+		return nil, fmt.Errorf("unsupported allocation mode: %s", cfg.AllocationMode)
 	}
+
+	return builder(cfg, logger), nil
 }

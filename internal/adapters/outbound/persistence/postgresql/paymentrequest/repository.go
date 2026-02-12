@@ -17,33 +17,68 @@ import (
 )
 
 type Repository struct {
-	db        *sql.DB
-	allocator portsout.PaymentAddressAllocator
-	logger    *log.Logger
+	db     *sql.DB
+	logger *log.Logger
 }
 
 var _ portsout.PaymentRequestRepository = (*Repository)(nil)
 
-func NewRepository(db *sql.DB, allocator portsout.PaymentAddressAllocator, logger *log.Logger) *Repository {
-	return &Repository{db: db, allocator: allocator, logger: logger}
+func NewRepository(db *sql.DB, logger *log.Logger) *Repository {
+	return &Repository{db: db, logger: logger}
 }
 
-func (r *Repository) Create(ctx context.Context, command dto.CreatePaymentRequestPersistenceCommand) (dto.CreatePaymentRequestPersistenceResult, *apperrors.AppError) {
-	if r.allocator == nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
-			"payment_address_allocator_missing",
-			"payment address allocator is required",
+func (r *Repository) Create(
+	ctx context.Context,
+	command dto.CreatePaymentRequestPersistenceCommand,
+	resolveAddress dto.ResolvePaymentAddressFunc,
+) (result dto.CreatePaymentRequestPersistenceResult, appErr *apperrors.AppError) {
+	startedAt := time.Now()
+	attemptResult := "failure"
+	attemptReason := "unknown"
+	derivationIndex := int64(-1)
+	walletAccountID := command.AssetCatalogSnapshot.WalletAccountID
+	defer func() {
+		if appErr != nil {
+			attemptReason = appErr.Code
+		} else if attemptReason == "unknown" {
+			attemptReason = attemptResult
+		}
+
+		latency := time.Since(startedAt)
+
+		if r.logger != nil {
+			r.logger.Printf(
+				"wallet allocation attempt mode=%s chain=%s network=%s asset=%s wallet_account_id=%s derivation_index=%d result=%s reason=%s retry_count=0 latency_ms=%d",
+				command.AllocationMode,
+				command.Chain,
+				command.Network,
+				command.Asset,
+				walletAccountID,
+				derivationIndex,
+				attemptResult,
+				attemptReason,
+				latency.Milliseconds(),
+			)
+		}
+	}()
+
+	if resolveAddress == nil {
+		appErr = apperrors.NewInternal(
+			"payment_address_resolver_missing",
+			"payment address resolver is required",
 			nil,
 		)
+		return result, appErr
 	}
 
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+		appErr = apperrors.NewInternal(
 			"payment_request_tx_begin_failed",
 			"failed to start payment request transaction",
 			map[string]any{"error": err.Error()},
 		)
+		return result, appErr
 	}
 
 	committed := false
@@ -55,52 +90,61 @@ func (r *Repository) Create(ctx context.Context, command dto.CreatePaymentReques
 
 	record, found, appErr := r.findIdempotencyRecordForUpdate(ctx, tx, command.IdempotencyScope, command.IdempotencyKey)
 	if appErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
 	if found {
 		if record.RequestHash != command.RequestHash {
-			return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewConflict(
+			appErr = apperrors.NewConflict(
 				"idempotency_key_conflict",
 				"Idempotency key reused with different request payload",
 				map[string]any{"idempotency_key": command.IdempotencyKey},
 			)
+			return result, appErr
 		}
 
 		var resource dto.PaymentRequestResource
 		if unmarshalErr := json.Unmarshal(record.ResponsePayload, &resource); unmarshalErr != nil {
-			return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+			appErr = apperrors.NewInternal(
 				"idempotency_payload_invalid",
 				"stored idempotency payload is invalid",
 				map[string]any{"error": unmarshalErr.Error(), "resource_id": record.ResourceID},
 			)
+			return result, appErr
 		}
 
 		if commitErr := tx.Commit(); commitErr != nil {
-			return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+			appErr = apperrors.NewInternal(
 				"payment_request_tx_commit_failed",
 				"failed to commit idempotency replay transaction",
 				map[string]any{"error": commitErr.Error()},
 			)
+			return result, appErr
 		}
 		committed = true
 
-		return dto.CreatePaymentRequestPersistenceResult{Resource: resource, Replayed: true}, nil
+		attemptResult = "replayed"
+		attemptReason = "idempotency_replay"
+		result = dto.CreatePaymentRequestPersistenceResult{Resource: resource, Replayed: true}
+		return result, nil
 	}
 
 	wallet, appErr := r.lockWalletAccountForUpdate(ctx, tx, command.AssetCatalogSnapshot.WalletAccountID)
 	if appErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
+	walletAccountID = wallet.ID
+	derivationIndex = wallet.NextIndex
 
 	if !wallet.IsActive {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+		appErr = apperrors.NewInternal(
 			"wallet_account_inactive",
 			"wallet account is inactive",
 			map[string]any{"wallet_account_id": wallet.ID},
 		)
+		return result, appErr
 	}
 	if wallet.Chain != command.Chain || wallet.Network != command.Network {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+		appErr = apperrors.NewInternal(
 			"asset_catalog_wallet_mismatch",
 			"asset catalog mapping does not match wallet account chain/network",
 			map[string]any{
@@ -111,20 +155,24 @@ func (r *Repository) Create(ctx context.Context, command dto.CreatePaymentReques
 				"request_network":   command.Network,
 			},
 		)
+		return result, appErr
 	}
 
-	allocation, appErr := r.allocator.Allocate(ctx, portsout.PaymentAddressAllocationInput{
-		Chain:           command.Chain,
-		AddressScheme:   command.AssetCatalogSnapshot.AddressScheme,
-		WalletAccountID: wallet.ID,
-		DerivationIndex: wallet.NextIndex,
+	allocation, appErr := resolveAddress(ctx, dto.ResolvePaymentAddressInput{
+		Chain:                  command.Chain,
+		Network:                command.Network,
+		AddressScheme:          command.AssetCatalogSnapshot.AddressScheme,
+		KeysetID:               wallet.KeysetID,
+		DerivationPathTemplate: wallet.DerivationPathTemplate,
+		DerivationIndex:        wallet.NextIndex,
+		ChainID:                command.AssetCatalogSnapshot.ChainID,
 	})
 	if appErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
 
 	if appErr := r.insertPaymentRequest(ctx, tx, command, wallet.ID, wallet.NextIndex, allocation.AddressCanonical); appErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
 
 	resource := dto.PaymentRequestResource{
@@ -149,11 +197,12 @@ func (r *Repository) Create(ctx context.Context, command dto.CreatePaymentReques
 
 	responsePayload, marshalErr := json.Marshal(resource)
 	if marshalErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+		appErr = apperrors.NewInternal(
 			"payment_request_payload_encode_failed",
 			"failed to encode payment request payload",
 			map[string]any{"error": marshalErr.Error()},
 		)
+		return result, appErr
 	}
 
 	if appErr := r.insertIdempotencyRecord(ctx, tx, command, responsePayload, command.IdempotencyExpiresAt); appErr != nil {
@@ -163,33 +212,41 @@ func (r *Repository) Create(ctx context.Context, command dto.CreatePaymentReques
 
 			replayedResource, replayFound, replayErr := r.loadReplayResource(ctx, command.IdempotencyScope, command.IdempotencyKey, command.RequestHash)
 			if replayErr != nil {
-				return dto.CreatePaymentRequestPersistenceResult{}, replayErr
+				appErr = replayErr
+				return result, appErr
 			}
 			if replayFound {
-				return dto.CreatePaymentRequestPersistenceResult{
+				attemptResult = "replayed"
+				attemptReason = "idempotency_replay_race"
+				result = dto.CreatePaymentRequestPersistenceResult{
 					Resource: replayedResource,
 					Replayed: true,
-				}, nil
+				}
+				return result, nil
 			}
 		}
 
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
 
 	if appErr := r.bumpWalletNextIndex(ctx, tx, wallet.ID, wallet.NextIndex, command.CreatedAt); appErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, appErr
+		return result, appErr
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
-		return dto.CreatePaymentRequestPersistenceResult{}, apperrors.NewInternal(
+		appErr = apperrors.NewInternal(
 			"payment_request_tx_commit_failed",
 			"failed to commit payment request transaction",
 			map[string]any{"error": commitErr.Error()},
 		)
+		return result, appErr
 	}
 	committed = true
 
-	return dto.CreatePaymentRequestPersistenceResult{Resource: resource, Replayed: false}, nil
+	attemptResult = "success"
+	attemptReason = "created"
+	result = dto.CreatePaymentRequestPersistenceResult{Resource: resource, Replayed: false}
+	return result, nil
 }
 
 type idempotencyRecord struct {
@@ -289,16 +346,18 @@ WHERE scope_principal = $1
 }
 
 type walletAccountRow struct {
-	ID        string
-	Chain     string
-	Network   string
-	NextIndex int64
-	IsActive  bool
+	ID                     string
+	Chain                  string
+	Network                string
+	KeysetID               string
+	DerivationPathTemplate string
+	NextIndex              int64
+	IsActive               bool
 }
 
 func (r *Repository) lockWalletAccountForUpdate(ctx context.Context, tx *sql.Tx, walletAccountID string) (walletAccountRow, *apperrors.AppError) {
 	const query = `
-SELECT id, chain, network, next_index, is_active
+SELECT id, chain, network, keyset_id, derivation_path_template, next_index, is_active
 FROM app.wallet_accounts
 WHERE id = $1
 FOR UPDATE
@@ -309,6 +368,8 @@ FOR UPDATE
 		&walletAccount.ID,
 		&walletAccount.Chain,
 		&walletAccount.Network,
+		&walletAccount.KeysetID,
+		&walletAccount.DerivationPathTemplate,
 		&walletAccount.NextIndex,
 		&walletAccount.IsActive,
 	)

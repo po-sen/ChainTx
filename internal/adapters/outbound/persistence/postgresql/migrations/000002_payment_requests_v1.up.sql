@@ -4,8 +4,6 @@ CREATE TABLE IF NOT EXISTS app.wallet_accounts (
   network text NOT NULL,
   keyset_id text NOT NULL,
   derivation_path_template text NOT NULL,
-  address_scheme text NOT NULL,
-  chain_id bigint,
   next_index bigint NOT NULL DEFAULT 0,
   is_active boolean NOT NULL DEFAULT TRUE,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -37,6 +35,23 @@ CREATE TABLE IF NOT EXISTS app.asset_catalog (
   CONSTRAINT asset_catalog_decimals_non_negative CHECK (decimals >= 0),
   CONSTRAINT asset_catalog_default_expires_range CHECK (
     default_expires_in_seconds >= 60 AND default_expires_in_seconds <= 2592000
+  ),
+  CONSTRAINT asset_catalog_evm_chain_id_required CHECK (
+    chain <> 'ethereum' OR chain_id IS NOT NULL
+  ),
+  CONSTRAINT asset_catalog_token_metadata_shape CHECK (
+    (
+      token_standard IS NULL
+      AND token_contract IS NULL
+      AND token_decimals IS NULL
+    )
+    OR
+    (
+      token_standard IS NOT NULL
+      AND token_contract IS NOT NULL
+      AND token_decimals IS NOT NULL
+      AND token_decimals >= 0
+    )
   )
 );
 
@@ -99,31 +114,34 @@ INSERT INTO app.wallet_accounts (
   network,
   keyset_id,
   derivation_path_template,
-  address_scheme,
-  chain_id,
   next_index,
   is_active
 )
 VALUES
   (
-    'wa_btc_mainnet_001',
+    'wa_btc_regtest_001',
     'bitcoin',
-    'mainnet',
-    'btc-mainnet-hot',
-    'm/84''/0''/0''/0/{index}',
-    'bip84_p2wpkh',
-    NULL,
+    'regtest',
+    'ks_btc_regtest',
+    '0/{index}',
     0,
     TRUE
   ),
   (
-    'wa_eth_mainnet_001',
+    'wa_btc_testnet_001',
+    'bitcoin',
+    'testnet',
+    'ks_btc_testnet',
+    '0/{index}',
+    0,
+    TRUE
+  ),
+  (
+    'wa_eth_sepolia_001',
     'ethereum',
-    'mainnet',
-    'eth-mainnet-hot',
-    'm/44''/60''/0''/0/{index}',
-    'evm_bip44',
-    1,
+    'sepolia',
+    'ks_eth_sepolia',
+    '0/{index}',
     0,
     TRUE
   )
@@ -133,8 +151,6 @@ SET
   network = EXCLUDED.network,
   keyset_id = EXCLUDED.keyset_id,
   derivation_path_template = EXCLUDED.derivation_path_template,
-  address_scheme = EXCLUDED.address_scheme,
-  chain_id = EXCLUDED.chain_id,
   is_active = EXCLUDED.is_active,
   updated_at = now();
 
@@ -159,9 +175,9 @@ INSERT INTO app.asset_catalog (
 VALUES
   (
     'bitcoin',
-    'mainnet',
+    'regtest',
     'BTC',
-    'wa_btc_mainnet_001',
+    'wa_btc_regtest_001',
     'sats',
     8,
     'bip84_p2wpkh',
@@ -171,43 +187,61 @@ VALUES
     NULL,
     3600,
     TRUE,
-    'spec:2026-02-09-multi-asset-payment-request-api',
+    'spec:2026-02-10-wallet-allocation-asset-catalog',
+    'system',
+    now()
+  ),
+  (
+    'bitcoin',
+    'testnet',
+    'BTC',
+    'wa_btc_testnet_001',
+    'sats',
+    8,
+    'bip84_p2wpkh',
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    3600,
+    TRUE,
+    'spec:2026-02-10-wallet-allocation-asset-catalog',
     'system',
     now()
   ),
   (
     'ethereum',
-    'mainnet',
+    'sepolia',
     'ETH',
-    'wa_eth_mainnet_001',
+    'wa_eth_sepolia_001',
     'wei',
     18,
     'evm_bip44',
-    1,
+    11155111,
     NULL,
     NULL,
     NULL,
     3600,
     TRUE,
-    'spec:2026-02-09-multi-asset-payment-request-api',
+    'spec:2026-02-10-wallet-allocation-asset-catalog',
     'system',
     now()
   ),
   (
     'ethereum',
-    'mainnet',
+    'sepolia',
     'USDT',
-    'wa_eth_mainnet_001',
+    'wa_eth_sepolia_001',
     'token_minor',
     6,
     'evm_bip44',
-    1,
+    11155111,
     'ERC20',
-    '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238',
     6,
     3600,
     TRUE,
-    'spec:2026-02-09-multi-asset-payment-request-api',
+    'spec:2026-02-10-wallet-allocation-asset-catalog',
     'system',
     now()
   )

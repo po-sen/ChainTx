@@ -5,7 +5,7 @@ import (
 
 	"chaintx/internal/application/dto"
 	portsin "chaintx/internal/application/ports/in"
-	"chaintx/internal/domain/value_objects"
+	valueobjects "chaintx/internal/domain/value_objects"
 	apperrors "chaintx/internal/shared_kernel/errors"
 )
 

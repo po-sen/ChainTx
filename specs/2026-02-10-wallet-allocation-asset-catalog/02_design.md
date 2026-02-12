@@ -3,7 +3,7 @@ doc: 02_design
 spec_date: 2026-02-10
 slug: wallet-allocation-asset-catalog
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on:
@@ -50,9 +50,9 @@ links:
     - `AddressCanonicalizer` (chain-specific canonical and response formatting)
   - `internal/application/use_cases`:
     - create-flow orchestration that consumes cursor and persists request atomically
-  - `internal/bootstrap`:
+  - `internal/infrastructure/config` and `internal/infrastructure/di`:
     - adapter mode/config loading
-    - startup catalog validation execution
+    - startup catalog validation execution + composition wiring
   - `internal/adapters/outbound/wallet`:
     - `devtest` derivation implementation
     - `prod` placeholder implementation

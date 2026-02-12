@@ -8,5 +8,9 @@ import (
 )
 
 type PaymentRequestRepository interface {
-	Create(ctx context.Context, command dto.CreatePaymentRequestPersistenceCommand) (dto.CreatePaymentRequestPersistenceResult, *apperrors.AppError)
+	Create(
+		ctx context.Context,
+		command dto.CreatePaymentRequestPersistenceCommand,
+		resolveAddress dto.ResolvePaymentAddressFunc,
+	) (dto.CreatePaymentRequestPersistenceResult, *apperrors.AppError)
 }

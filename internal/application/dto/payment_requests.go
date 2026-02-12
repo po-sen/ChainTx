@@ -1,6 +1,11 @@
 package dto
 
-import "time"
+import (
+	"context"
+	"time"
+
+	apperrors "chaintx/internal/shared_kernel/errors"
+)
 
 type IdempotencyScope struct {
 	PrincipalID string
@@ -40,7 +45,25 @@ type CreatePaymentRequestPersistenceCommand struct {
 	IdempotencyExpiresAt time.Time
 	CreatedAt            time.Time
 	AssetCatalogSnapshot AssetCatalogEntry
+	AllocationMode       string
 }
+
+type ResolvePaymentAddressInput struct {
+	Chain                  string
+	Network                string
+	AddressScheme          string
+	KeysetID               string
+	DerivationPathTemplate string
+	DerivationIndex        int64
+	ChainID                *int64
+}
+
+type ResolvePaymentAddressOutput struct {
+	AddressCanonical string
+	Address          string
+}
+
+type ResolvePaymentAddressFunc func(ctx context.Context, input ResolvePaymentAddressInput) (ResolvePaymentAddressOutput, *apperrors.AppError)
 
 type CreatePaymentRequestPersistenceResult struct {
 	Resource PaymentRequestResource
