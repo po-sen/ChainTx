@@ -3,7 +3,7 @@ doc: 01_requirements
 spec_date: 2026-02-12
 slug: local-btc-eth-usdt-chain-sim
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []
@@ -45,31 +45,27 @@ links:
     - ETH ready: JSON-RPC `eth_chainId` and `eth_blockNumber` succeed.
     - USDT ready: deploy artifact exists and contract readiness check succeeds (deployment receipt or `balanceOf` probe).
   - [ ] AC4: USDT compose is separate from ETH compose and references ETH RPC via explicit configuration.
-  - [ ] AC5: Every compose file joins one shared external network (`chaintx-local-net`) and the network is created/validated by Make targets.
-  - [ ] AC6: Cross-compose service names/network aliases are stable and documented (for example `btc-node`, `eth-node`, `usdt-deployer`).
+  - [ ] AC5: Rail compose files are isolated by default and do not require a shared external docker network.
+  - [ ] AC6: Cross-rail dependency contracts use explicit RPC endpoint configuration (for example `ETH_RPC_URL`) instead of compose service DNS coupling.
+  - [ ] AC7: Rail extension follows Open/Closed style: adding a new rail (for example `usdt-tron`) is done by adding a new compose file and new `chain-up/down-*` targets, without changing existing BTC/ETH/USDT rail contracts.
 - Notes: Separation is required for operational clarity and partial test runs.
 
 ### FR-002 - Provide Makefile orchestration for local stacks
 
-- Description: Makefile must expose simple commands to manage per-rail lifecycle, resource-aware startup profiles, and deterministic reset/status flows.
+- Description: Makefile must expose only startup/shutdown lifecycle commands for rails and local profiles.
 - Acceptance criteria:
-  - [ ] AC1: Make targets include per-rail `up/down/logs` commands for BTC, ETH, and USDT stacks.
+  - [ ] AC1: Make targets include per-rail `up/down` commands for BTC, ETH, and USDT stacks.
   - [ ] AC2: Make targets include profile commands:
     - `local-up` / `local-down` (default minimal profile: service + BTC)
     - `local-up-all` / `local-down` (optional full profile: service + BTC + ETH + USDT)
-  - [ ] AC3: Make targets include smoke commands:
-    - `local-smoke` (default profile checks)
-    - `local-smoke-all` (full profile checks)
-  - [ ] AC4: Make targets include reset commands: `local-reset-btc`, `local-reset-eth`, `local-reset-usdt`, `local-reset-all`.
-  - [ ] AC5: Make targets include status commands (`chain-ps-*` and `local-status`) that print stack readiness and artifact paths.
-  - [ ] AC6: `chain-up-usdt` runs ETH preflight gate (`eth_chainId`) and fails fast when ETH RPC is unreachable or chain id is unexpected.
-  - [ ] AC7: Commands are idempotent (re-running `up` does not create duplicate critical resources or fatal conflicts).
-  - [ ] AC8: Each Make wrapper uses fixed compose project names via `docker compose --project-name`:
+  - [ ] AC3: `chain-up-usdt` uses explicit `ETH_RPC_URL` contract and fails fast when ETH RPC is unreachable or chain id is unexpected.
+  - [ ] AC4: Commands are idempotent (re-running `up` does not create duplicate critical resources or fatal conflicts).
+  - [ ] AC5: Each Make wrapper uses fixed compose project names via `docker compose --project-name`:
     - BTC: `chaintx-local-btc`
     - ETH: `chaintx-local-eth`
     - USDT: `chaintx-local-usdt`
     - Service: `chaintx-local-service`
-- Notes: Existing targets (`compose-up`, `compose-down`) must remain backward compatible.
+- Notes: Service lifecycle is standardized on `service-up` / `service-down` targets.
 
 ### FR-003 - Start ChainTx service in local integration mode
 
@@ -125,7 +121,7 @@ links:
   - [ ] AC5: Deployment/mint flow fails fast when chain id mismatches the expected local value (`31337`).
   - [ ] AC6: Deterministic deploy policy is fixed:
     - if `usdt.json` exists and chain fingerprint matches current ETH chain (`chain_id + genesis_block_hash`), skip redeploy and reuse artifact
-    - if fingerprint mismatches, fail with explicit remediation (`local-reset-usdt` then `chain-up-usdt`)
+    - if fingerprint mismatches, fail with explicit remediation (`chain-down-usdt` then `chain-up-usdt`)
 - Notes: USDT compose remains a separate operational unit even though it depends on ETH RPC.
 
 ### FR-008 - Keep local simulation changes isolated from core application logic
@@ -142,9 +138,9 @@ links:
 - Description: README (or dedicated local-runbook doc) must document setup, commands, and troubleshooting.
 - Acceptance criteria:
   - [ ] AC1: Docs list prerequisites, per-stack commands, fixed local constants (`BTC regtest`, `EVM 31337`, `USDT decimals 6`), and artifact file locations.
-  - [ ] AC2: Docs include a minimal end-to-end smoke sequence (default profile: service + BTC) and an optional full smoke sequence (service + BTC + ETH + USDT).
+  - [ ] AC2: Docs include a minimal startup/shutdown sequence (default profile: service + BTC) and an optional full sequence (service + BTC + ETH + USDT).
   - [ ] AC3: Docs include common failure diagnostics (port conflict, RPC unreachable, wallet init failure, contract deploy failure, stale artifact mismatch).
-  - [ ] AC4: Docs include reset strategy usage and when to run each reset target.
+  - [ ] AC4: Docs include cleanup strategy usage and when to run per-rail `down` commands with data removal options.
   - [ ] AC5: Docs include `.gitignore` rules for generated local artifact/key files.
 - Notes: Documentation should prioritize copy-paste commands.
 
@@ -156,14 +152,14 @@ links:
   - [ ] AC1.1: `compose_project` field must exactly equal the fixed Make wrapper project names (`chaintx-local-btc|eth|usdt|service` as applicable).
   - [ ] AC1.2: ETH and USDT artifacts must include `genesis_block_hash` for chain fingerprint checks.
   - [ ] AC2: Artifacts include `warnings` array (may be empty) for non-fatal conditions.
-  - [ ] AC3: `local-smoke-all` detects stale USDT artifact after ETH reset/restart using `chain_id + genesis_block_hash` fingerprint and returns actionable remediation (for example run `local-reset-usdt` then `chain-up-usdt`).
+  - [ ] AC3: `scripts/local-chains/smoke_local_all.sh` detects stale USDT artifact after ETH reset/restart using `chain_id + genesis_block_hash` fingerprint and returns actionable remediation (for example run `chain-down-usdt` then `chain-up-usdt`).
   - [ ] AC4: Artifact consumers fail fast with explicit errors when required fields are missing or malformed.
 - Notes: Artifact schema version starts at `1`.
 
 ## Non-functional requirements
 
 - Performance (NFR-001): From warm image cache, per-rail stack startup to ready state should complete within 120 seconds; default `local-up` within 180 seconds; optional `local-up-all` within 360 seconds.
-- Availability/Reliability (NFR-002): `make local-up` + `make local-smoke` + `make local-down` succeed for at least 3 consecutive cycles; `local-up-all` + `local-smoke-all` + `local-down` succeeds for at least 1 cycle.
+- Availability/Reliability (NFR-002): `make local-up` + `scripts/local-chains/smoke_local.sh` + `make local-down` succeed for at least 3 consecutive cycles; `make local-up-all` + `scripts/local-chains/smoke_local_all.sh` + `make local-down` succeeds for at least 1 cycle.
 - Security/Privacy (NFR-003): Local simulation uses test keys only; generated artifacts/keys are git-ignored; no production credentials are committed.
 - Compliance (NFR-004): Local guards prevent accidental real-network usage by enforcing BTC `regtest` and EVM `chain_id=31337` defaults.
 - Observability (NFR-005): Logs and status commands expose readiness probe results, preflight failures, artifact paths, and smoke summaries.

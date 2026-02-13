@@ -3,7 +3,7 @@ doc: 02_design
 spec_date: 2026-02-12
 slug: local-btc-eth-usdt-chain-sim
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []
@@ -19,7 +19,7 @@ links:
 
 ## High-level approach
 
-- Summary: Build a local integration harness around ChainTx using four compose units: service stack (app + postgres) and three rail stacks (btc, eth, usdt). Keep USDT in a separate compose file while wiring it to ETH RPC over a shared external docker network.
+- Summary: Build a local integration harness around ChainTx using four compose units: service stack (app + postgres) and three rail stacks (btc, eth, usdt). Keep rails isolated; USDT rail runs its own local EVM node and deploy/mint service.
 - Key decisions:
   - Local constants are fixed for this spec:
     - BTC local sim network: `regtest` only
@@ -27,11 +27,11 @@ links:
     - Local USDT token decimals: `6`
   - BTC image/runtime is pinned to `bitcoin/bitcoin:29.0` and bootstrap requires descriptor-wallet RPC behavior.
   - Default startup profile is `service + BTC`; full-stack startup is explicit opt-in (`local-up-all`).
-  - Use isolated compose files per rail with one shared external network (`chaintx-local-net`).
+  - Use isolated compose files per rail without shared external compose network.
   - Use script-driven bootstrap/deploy jobs to generate deterministic artifacts.
   - BTC receiver key export is descriptor-based, account-level BIP84 (`wpkh`), external branch `/0/*`.
   - Keep ChainTx core business logic untouched unless minimal config plumbing is strictly required.
-  - Standardize orchestration through Make targets including status and reset commands.
+  - Standardize orchestration through minimal Make targets (`up`/`down` only).
 
 ## System context
 
@@ -42,8 +42,8 @@ links:
   - `deployments/local-chains/docker-compose.eth.yml`
     - `eth-node` (local EVM JSON-RPC, deterministic accounts, chain id `31337`)
   - `deployments/local-chains/docker-compose.usdt.yml`
-    - `usdt-deployer` (ERC20 deploy + mint job against `eth-node` RPC)
-  - `deployments/local-chains/docker-compose.service.yml` (or local override of existing compose)
+    - `usdt-node` (single-container USDT rail: embedded local EVM JSON-RPC + ERC20 deploy/mint + resident service)
+  - `deployments/service/docker-compose.yml` (or local override of existing compose)
     - `postgres`
     - `app`
   - `scripts/local-chains/`
@@ -54,9 +54,6 @@ links:
     - `smoke_local_all.sh`
     - `status_local.sh`
 - Interfaces:
-  - Compose network contract:
-    - every compose file joins `chaintx-local-net` with `external: true`
-    - Make is responsible for creating/verifying this network before `up`
   - Compose project naming contract:
     - Make wrappers call `docker compose --project-name ...` with fixed values:
       - `chaintx-local-btc`
@@ -64,9 +61,14 @@ links:
       - `chaintx-local-usdt`
       - `chaintx-local-service`
     - Artifact `compose_project` must equal the wrapper's exact project name.
-  - Cross-compose addressing contract:
-    - ETH RPC endpoint for USDT deployer defaults to `http://eth-node:8545`
-    - stable aliases/service names are required for cross-compose communication
+  - Cross-rail addressing contract:
+    - USDT rail uses its own RPC endpoint (`USDT_RPC_URL`, default host `http://127.0.0.1:8546`)
+    - rails do not depend on shared compose network aliases or cross-rail RPC dependencies
+  - Rail extension contract (for future rails such as `usdt-tron`):
+    - Add new compose file `deployments/local-chains/docker-compose.<rail>.yml`
+    - Add new artifact file `<rail>.json` with the same base schema fields
+    - Add new Make targets `chain-up-<rail>` and `chain-down-<rail>`
+    - Do not modify existing BTC/ETH/USDT rail contracts except optional aggregate targets (`chain-up-all` / `chain-down-all`)
   - Artifact contract:
     - files under `deployments/local-chains/artifacts/`
     - required base fields: `schema_version`, `generated_at`, `network`, `compose_project`, `warnings`
@@ -76,23 +78,19 @@ links:
 - Flow 1: Bring up default local profile (resource-light)
 
   - `make local-up` sequence:
-    1. create/verify `chaintx-local-net`
+    1. `make service-up`
     2. `make chain-up-btc`
     3. wait BTC readiness + run BTC bootstrap
-    4. `make service-up`
-    5. print `local-status`
 
 - Flow 1b: Bring up optional full profile
 
   - `make local-up-all` sequence:
-    1. create/verify `chaintx-local-net`
+    1. `make service-up`
     2. `make chain-up-btc`
     3. wait BTC readiness + run BTC bootstrap
     4. `make chain-up-eth`
     5. wait ETH readiness (`eth_chainId == 31337`)
     6. `make chain-up-usdt`
-    7. `make service-up`
-    8. print `local-status`
 
 - Flow 2: BTC bootstrap (descriptor-based)
 
@@ -106,34 +104,32 @@ links:
     - `derivation_template` (`m/84'/1'/0'/0/{index}`)
   - Write `btc.json` artifact with schema metadata.
 
-- Flow 3: ETH + USDT bootstrap
+- Flow 3: USDT bootstrap (independent single-container rail)
 
-  - ETH stack starts local chain and exports `eth.json` (`chain_id=31337`, funded account info).
-  - USDT deployer preflight checks:
-    - ETH RPC reachable
-    - `eth_chainId == 31337`
+  - USDT rail starts embedded EVM node inside `usdt-node` and waits readiness.
+  - USDT node preflight checks:
+    - USDT rail embedded RPC reachable
+    - `eth_chainId == 31337` on USDT-local EVM
   - USDT deterministic deployment policy:
-    - if `usdt.json` exists and fingerprint matches current ETH chain (`chain_id + genesis_block_hash`), skip redeploy and reuse artifact
-    - if fingerprint mismatches, fail with remediation (`local-reset-usdt` then `chain-up-usdt`)
+    - if `usdt.json` exists and fingerprint matches current USDT rail chain (`chain_id + genesis_block_hash`), skip redeploy and reuse artifact
+    - if fingerprint mismatches, fail with remediation (`chain-down-usdt` then `chain-up-usdt`)
   - Deploy ERC20 with `decimals=6`, mint test balance, write `usdt.json` when deployment is required.
 
 - Flow 4: Smoke checks
 
-  - `make local-smoke` validates default profile:
+  - `scripts/local-chains/smoke_local.sh` validates default profile:
     - service `GET /healthz`
     - BTC send + mine + confirmation evidence
-  - `make local-smoke-all` validates full profile:
+  - `scripts/local-chains/smoke_local_all.sh` validates full profile:
     - default checks
     - ETH transfer capability
     - USDT balance/transfer checks
   - Stale-state guard:
-    - if ETH state changes and `usdt.json` no longer matches deployed chain state, fail fast with reset instruction.
+    - if USDT rail EVM state changes and `usdt.json` no longer matches deployed chain state, fail fast with reset instruction.
 
-- Flow 5: Reset strategy
-  - `local-reset-btc`: remove BTC volumes/state and `btc.json`
-  - `local-reset-eth`: remove ETH volumes/state and `eth.json`
-  - `local-reset-usdt`: remove USDT deployment cache/state and `usdt.json`
-  - `local-reset-all`: run all resets and clear composite status cache
+- Flow 5: Cleanup strategy
+  - Cleanup uses per-rail `docker compose down` (and optional `-v`) commands.
+  - Artifact cleanup is handled as manual developer action when full reset is needed.
 
 ## Diagrams (optional)
 
@@ -149,9 +145,9 @@ flowchart LR
   C --> G[eth.json]
   D --> H[usdt.json]
   E --> I[ChainTx ready]
-  F --> J[local-smoke]
+  F --> J[smoke_local.sh]
   I --> J
-  G --> L[local-smoke-all]
+  G --> L[smoke_local_all.sh]
   H --> L
   J --> M[default pass/fail summary]
   L --> N[full pass/fail summary]
@@ -169,7 +165,7 @@ flowchart LR
     - `rpc_url`, `chain_id`, `genesis_block_hash`, `payer_address`, `payer_private_key`
   - `deployments/local-chains/artifacts/usdt.json`
     - `schema_version`, `generated_at`, `network`, `compose_project`, `warnings`
-    - `rpc_url`, `chain_id`, `genesis_block_hash`, `contract_address`, `token_decimals`, `minted_to`, `minted_amount`
+    - `rpc_url`, `chain_id`, `genesis_block_hash`, `contract_address`, `token_decimals`, `minted_to`, `minted_amount`, `payer_address`, `payer_private_key`
 - Schema changes or migrations:
   - No new application DB schema required by this spec.
 - Consistency and idempotency:
@@ -183,11 +179,8 @@ flowchart LR
 - Endpoints or events:
   - No new public ChainTx endpoints are introduced.
 - Local CLI contract:
-  - Per-rail lifecycle: `chain-up-*`, `chain-down-*`, `chain-logs-*`, `chain-ps-*`
+  - Per-rail lifecycle: `chain-up-*`, `chain-down-*`
   - Profiles: `local-up`, `local-up-all`, `local-down`
-  - Smoke: `local-smoke`, `local-smoke-all`
-  - Reset: `local-reset-btc`, `local-reset-eth`, `local-reset-usdt`, `local-reset-all`
-  - Status: `local-status`
 - Request/response examples:
 
 ```json
@@ -224,7 +217,7 @@ flowchart LR
 ## Observability
 
 - Logs:
-  - Rail-specific logs via Make wrappers.
+  - Rail-specific logs are inspected via direct `docker compose logs` commands when needed.
   - Structured bootstrap/deploy/smoke summaries with artifact paths.
 - Metrics:
   - Not mandatory for first iteration; smoke summary JSON is required.
@@ -262,5 +255,5 @@ flowchart LR
 - Risk: Full profile overloads low-resource machines.
 - Mitigation: keep minimal default profile and document full-profile usage as opt-in.
 
-- Risk: ETH reset leaves stale USDT artifact, causing false smoke failures.
+- Risk: USDT rail EVM reset leaves stale USDT artifact, causing false smoke failures.
 - Mitigation: stale-artifact detection + explicit reset commands in runbook.

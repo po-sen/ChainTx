@@ -1,0 +1,30 @@
+services:
+  btc-node:
+    image: bitcoin/bitcoin:29.0
+    command:
+      - -regtest=1
+      - -server=1
+      - -txindex=1
+      - -rpcuser=${BTC_RPC_USER:-chaintx}
+      - -rpcpassword=${BTC_RPC_PASSWORD:-chaintx}
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -fallbackfee=0.0002
+      - -printtoconsole=1
+    ports:
+      - "${BTC_RPC_PORT:-18443}:18443"
+    volumes:
+      - btc-data:/home/bitcoin/.bitcoin
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bitcoin-cli -regtest -rpcuser=${BTC_RPC_USER:-chaintx} -rpcpassword=${BTC_RPC_PASSWORD:-chaintx} getblockchaininfo >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  btc-data:

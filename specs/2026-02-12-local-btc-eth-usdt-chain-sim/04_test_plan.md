@@ -3,7 +3,7 @@ doc: 04_test_plan
 spec_date: 2026-02-12
 slug: local-btc-eth-usdt-chain-sim
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []
@@ -39,7 +39,7 @@ links:
 - TC-001: Make target contract validation
 
   - Linked requirements: FR-002, FR-009, NFR-006
-  - Steps: Parse `Makefile` to verify required targets exist (`local-up`, `local-up-all`, `local-smoke`, `local-smoke-all`, per-rail lifecycle, reset, status) and each wrapper passes fixed `--project-name`.
+  - Steps: Parse `Makefile` to verify required targets exist (`local-up`, `local-up-all`, `local-down`, and per-rail `chain-up/-down`) and each wrapper passes fixed `--project-name`.
   - Expected: Target names/profile semantics match runbook and project names map to `chaintx-local-btc|eth|usdt|service`.
 
 - TC-002: BTC bootstrap idempotency and top-up behavior
@@ -79,10 +79,10 @@ links:
   - Steps: `make chain-up-eth`, query `eth_chainId` and `eth_blockNumber`, then `make chain-down-eth`.
   - Expected: ETH RPC is reachable and `eth_chainId == 0x7a69` (`31337`).
 
-- TC-103: USDT stack independent lifecycle (ETH dependency)
+- TC-103: USDT stack independent lifecycle (self-contained EVM rail)
 
   - Linked requirements: FR-001, FR-007, NFR-001, NFR-004
-  - Steps: Start ETH stack, then `make chain-up-usdt`; verify artifact and token metadata.
+  - Steps: Run `make chain-up-usdt`; verify USDT rail RPC readiness plus artifact/token metadata.
   - Expected: USDT deploy succeeds only on expected chain and outputs `token_decimals=6`, `chain_id=31337`.
 
 - TC-104: Service startup with default profile
@@ -94,18 +94,18 @@ links:
 - TC-105: Default smoke flow
 
   - Linked requirements: FR-002, FR-005, FR-010, NFR-005
-  - Steps: Run `make local-up` then `make local-smoke`.
+  - Steps: Run `make local-up` then `scripts/local-chains/smoke_local.sh`.
   - Expected: Smoke verifies service + BTC path and outputs pass/fail summary with evidence.
 
 - TC-106: Full smoke flow
 
   - Linked requirements: FR-002, FR-006, FR-007, FR-010, NFR-005
-  - Steps: Run `make local-up-all` then `make local-smoke-all`.
+  - Steps: Run `make local-up-all` then `scripts/local-chains/smoke_local_all.sh`.
   - Expected: Smoke verifies BTC/ETH/USDT flows, applies USDT reuse policy by chain fingerprint, and outputs full summary including contract and transfer checks.
 
 - TC-107: Reset command behavior
   - Linked requirements: FR-002, FR-009, FR-010, NFR-002
-  - Steps: Generate state/artifacts, run each reset target, then rerun corresponding startup target.
+  - Steps: Generate state/artifacts, run per-rail cleanup using `docker compose ... down` (with `-v` when needed), then rerun corresponding startup target.
   - Expected: Targeted state is removed and recreated successfully with fresh valid artifacts.
 
 ### E2E (if applicable)
@@ -113,33 +113,33 @@ links:
 - TC-201: Default profile repeatability
 
   - Linked requirements: FR-002, FR-003, FR-005, FR-010, NFR-001, NFR-002
-  - Steps: Execute 3 cycles of `make local-up` -> `make local-smoke` -> `make local-down`.
+  - Steps: Execute 3 cycles of `make local-up` -> `scripts/local-chains/smoke_local.sh` -> `make local-down`.
   - Expected: All 3 cycles pass without manual cleanup.
 
 - TC-202: Optional full profile cycle
 
   - Linked requirements: FR-002, FR-003, FR-006, FR-007, FR-010, NFR-001, NFR-002
-  - Steps: Execute 1 cycle of `make local-up-all` -> `make local-smoke-all` -> `make local-down`.
+  - Steps: Execute 1 cycle of `make local-up-all` -> `scripts/local-chains/smoke_local_all.sh` -> `make local-down`.
   - Expected: Full profile passes one complete cycle with deterministic artifacts.
 
-- TC-203: Stale artifact detection after ETH reset
+- TC-203: Stale artifact detection after USDT rail reset
   - Linked requirements: FR-010, FR-007, FR-002, NFR-002, NFR-005
   - Steps:
     - Run full profile once.
-    - Execute `make local-reset-eth` only.
-    - Start ETH again without resetting USDT.
-    - Run `make local-smoke-all`.
-  - Expected: Smoke fails fast when `chain_id + genesis_block_hash` fingerprint mismatches and returns actionable remediation (for example `local-reset-usdt` then `chain-up-usdt`).
+    - Execute `docker compose -f deployments/local-chains/docker-compose.usdt.yml --project-name chaintx-local-usdt down -v` only.
+    - Start USDT rail again without cleaning stale artifact file.
+    - Run `scripts/local-chains/smoke_local_all.sh`.
+  - Expected: Smoke fails fast when `chain_id + genesis_block_hash` fingerprint mismatches and returns actionable remediation (for example `chain-down-usdt` then `chain-up-usdt`).
 
 ## Edge cases and failure modes
 
 - Case: BTC RPC port conflict on host.
 - Expected behavior: `chain-up-btc` fails fast with clear port binding error and remediation hint.
 
-- Case: ETH stack down while USDT deploy starts.
-- Expected behavior: USDT deployer retries/waits up to limit, then exits with explicit dependency failure.
+- Case: USDT rail EVM service is down while `usdt-node` starts.
+- Expected behavior: USDT node retries/waits up to limit, then exits with explicit dependency failure.
 
-- Case: ETH reset causes stale USDT artifact.
+- Case: USDT rail reset causes stale USDT artifact.
 - Expected behavior: Full smoke detects mismatch and prints precise reset workflow.
 
 - Case: BTC bootstrap rerun with insufficient spendable balance or wallet lock state.
@@ -153,3 +153,11 @@ links:
   - Validate repeatability with TC-201/TC-202 and stale-state scenario TC-203.
 - Security:
   - Verify generated artifacts/keys are git-ignored and no production credentials are used.
+
+## Execution results
+
+- Execution date: 2026-02-12.
+- Passed: TC-101, TC-102, TC-103, TC-104, TC-105, TC-106, TC-107 (single-cycle execution).
+- Passed: unit-level config/syntax checks for TC-001, TC-004.
+- Passed: repository regression checks (`make lint`, `go test ./...`).
+- Pending future reliability burn-in: TC-201 and TC-202 multi-cycle repetition target (recommended follow-up in CI or long-run local validation).

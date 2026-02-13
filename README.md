@@ -15,58 +15,132 @@ ChainTx 是一個提供「多資產收款請求（Payment Request）」的 HTTP 
 - `POST /v1/payment-requests`
 - `GET /v1/payment-requests/{id}`
 
----
+## Prerequisites
 
-## 1. 快速啟動（Docker Compose）
+- Go `1.25.7+`
+- Docker Engine + Docker Compose plugin
+- `jq`
+- `curl`
 
-啟動：
+## Service-only Workflow
+
+只啟動 service stack（app + postgres）：
 
 ```bash
-make compose-up
+make service-up
 ```
 
 停止：
 
 ```bash
-make compose-down
+make service-down
 ```
 
-預設服務位址：`http://localhost:8080`
+## Local Chain Simulation (new workflow)
 
----
+此模式提供獨立 rail stacks，遵守以下固定常數：
 
-## 2. 設定（Environment Variables）
+- BTC local: `regtest` only
+- EVM local: `chain_id=31337`
+- USDT local token decimals: `6`
+- USDT local EVM RPC: `USDT_RPC_URL`（預設 `http://127.0.0.1:8546`）
 
-| 變數                                             | 必填             | 預設值             | 說明                                                           |
-| ------------------------------------------------ | ---------------- | ------------------ | -------------------------------------------------------------- |
-| `DATABASE_URL`                                   | 是               | 無                 | PostgreSQL 連線字串                                            |
-| `PORT`                                           | 否               | `8080`             | HTTP 監聽埠                                                    |
-| `OPENAPI_SPEC_PATH`                              | 否               | `api/openapi.yaml` | OpenAPI 檔案路徑                                               |
-| `PAYMENT_REQUEST_ALLOCATION_MODE`                | 否               | `devtest`          | wallet allocation mode（目前內建 `devtest`、`prod`）           |
-| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`           | Devtest 模式必填 | 無                 | keyset JSON（`{"keyset_id":"xpub/tpub/vpub", ...}`）           |
-| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`          | 否               | `false`            | Devtest 是否允許 mainnet allocation                            |
-| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON` | 否               | 內建 allow-list    | 覆寫 address scheme allow-list（JSON object of string arrays） |
+命名規則（build/deployments）：
 
-Compose 預設 `DATABASE_URL`：
-`postgresql://chaintx:chaintx@postgres:5432/chaintx?sslmode=disable`
+- `build/service/*`：service image build files
+- `build/local-chains/*`：local chain helper image build files
+- `deployments/service/*`：service stack compose
+- `deployments/local-chains/*`：chain rail compose（btc/eth/usdt）
 
----
+擴充規則（保持低耦合）：
 
-## 3. 啟動時自動檢查
+- 新增 rail（例如 `usdt-tron`）時，新增 `docker-compose.<rail>.yml`、`chain-up/down-<rail>`、`<rail>.json` artifact 即可。
+- 既有 rail（btc/eth/usdt）不需要修改；最多只調整 `chain-up-all` / `chain-down-all` 聚合目標。
 
-服務啟動時會依序執行：
+### Profiles
 
-1. DB readiness check
-2. DB migrations
-3. asset catalog integrity validation
+預設最小 profile（建議日常開發）：
 
-任一步驟失敗，服務會直接退出（不對外提供 API）。
+```bash
+make local-up
+```
 
----
+會啟動：
 
-## 4. API 快速使用
+- `service` stack（app + postgres）
+- `btc` stack（含 payer/receiver descriptor bootstrap）
 
-以下命令假設服務在 `http://localhost:8080`。
+全量 profile（需要 ETH + USDT 測試時）：
+
+```bash
+make local-up-all
+```
+
+會額外啟動：
+
+- `eth` stack（anvil, chain id 31337）
+- `usdt` stack（單一 `usdt-node` 容器內含 anvil + deploy/mint, decimals=6）
+
+停止 profile：
+
+```bash
+make local-down
+```
+
+### Per-rail Commands
+
+BTC:
+
+```bash
+make chain-up-btc
+make chain-down-btc
+```
+
+ETH:
+
+```bash
+make chain-up-eth
+make chain-down-eth
+```
+
+USDT:
+
+```bash
+make chain-up-usdt
+make chain-down-usdt
+```
+
+`chain-up-usdt` 會啟動單一 `usdt-node`（內含 USDT 專用 EVM，預設 host `:8546`），等待 deploy/healthcheck 完成後常駐執行。
+
+Service:
+
+```bash
+make service-up
+make service-down
+```
+
+Aggregate:
+
+```bash
+make chain-up-all
+make chain-down-all
+```
+
+## Configuration
+
+| Variable                                         | Required     | Default            | Description                                         |
+| ------------------------------------------------ | ------------ | ------------------ | --------------------------------------------------- |
+| `DATABASE_URL`                                   | Yes          | none               | PostgreSQL DSN                                      |
+| `PORT`                                           | No           | `8080`             | HTTP listen port                                    |
+| `OPENAPI_SPEC_PATH`                              | No           | `api/openapi.yaml` | OpenAPI file path                                   |
+| `PAYMENT_REQUEST_ALLOCATION_MODE`                | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)          |
+| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`           | Devtest only | none               | Keyset JSON (`{"keyset_id":"xpub/tpub/vpub", ...}`) |
+| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`          | No           | `false`            | Allow mainnet allocation in devtest mode            |
+| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON` | No           | built-in allowlist | Override address-scheme allowlist                   |
+
+## API Quick Usage
+
+以下命令假設服務位於 `http://localhost:8080`。
 
 健康檢查：
 
@@ -74,13 +148,13 @@ Compose 預設 `DATABASE_URL`：
 curl -i http://localhost:8080/healthz
 ```
 
-列出可用資產：
+列出資產：
 
 ```bash
 curl -i http://localhost:8080/v1/assets
 ```
 
-建立 Payment Request（首次）：
+建立 Payment Request：
 
 ```bash
 curl -i \
@@ -97,75 +171,9 @@ curl -i \
   }'
 ```
 
-同 key + 同 payload 重送（idempotency replay）：
+## Troubleshooting
 
-- 預期 `200 OK`
-- `X-Idempotency-Replayed: true`
-- `id` 與首次相同
-
-查詢單筆 Payment Request：
-
-```bash
-curl -i http://localhost:8080/v1/payment-requests/<payment_request_id>
-```
-
----
-
-## 5. `POST /v1/payment-requests` 請求重點
-
-主要欄位：
-
-- `chain`, `network`, `asset`（必要）
-- `expected_amount_minor`（可選，字串整數，1~78 digits）
-- `expires_in_seconds`（可選，範圍 `60..2592000`）
-- `metadata`（可選，JSON object，最大 4KB）
-
-建議 Header：
-
-- `Idempotency-Key`：建議必帶
-- `X-Principal-ID`：若由 API Gateway 管理租戶/身份，建議注入
-
----
-
-## 6. 錯誤格式
-
-所有 API 錯誤統一格式：
-
-```json
-{
-  "error": {
-    "code": "invalid_request",
-    "message": "expires_in_seconds must be between 60 and 2592000",
-    "details": {
-      "field": "expires_in_seconds"
-    }
-  }
-}
-```
-
-常見狀態碼：
-
-- `400`：格式/驗證錯誤（如 `invalid_request`, `unsupported_asset`, `unsupported_network`）
-- `404`：資源不存在（`payment_request_not_found`）
-- `409`：idempotency key 與 payload 衝突（`idempotency_key_conflict`）
-
----
-
-## 7. API 契約文件
-
-- Swagger UI：`GET /swagger/index.html`
-- OpenAPI YAML：`GET /swagger/openapi.yaml`
-
----
-
-## 8. 維運排錯
-
-如果服務啟動即退出，優先檢查：
-
-1. `DATABASE_URL` 是否可連線
-2. migration 權限是否足夠
-3. asset catalog 與 wallet mapping 是否一致
-
-觀測資訊：
-
-- allocation 結構化 log（含 mode/chain/network/asset/result/latency 等欄位）
+- `chain-up-usdt` 失敗且訊息為 chain mismatch：重跑 `make chain-down-usdt && make chain-up-usdt`（USDT rail 與 ETH rail 已分離，不需依賴 `chain-up-eth`）。
+- `chain-up-usdt` 或 full smoke 顯示 USDT stale artifact：執行 `make chain-down-usdt && make chain-up-usdt`。
+- BTC 餘額不足：重跑 `make chain-up-btc`（bootstrap 會自動補挖）。
+- 服務啟動失敗：用 `docker compose -f deployments/service/docker-compose.yml --project-name chaintx-local-service logs app postgres` 檢查詳細訊息。

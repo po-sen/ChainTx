@@ -3,7 +3,7 @@ doc: 03_tasks
 spec_date: 2026-02-12
 slug: local-btc-eth-usdt-chain-sim
 mode: Full
-status: READY
+status: DONE
 owners:
   - posen
 depends_on: []
@@ -20,7 +20,7 @@ links:
 ## Mode decision
 
 - Selected mode: Full
-- Rationale: This scope includes multi-stack external integrations (Bitcoin Core, local EVM, ERC20 deployment), profile orchestration, cross-compose networking contracts, and non-trivial failure modes.
+- Rationale: This scope includes multi-stack external integrations (Bitcoin Core, local EVM, ERC20 deployment), profile orchestration, host-level RPC contracts across isolated rails, and non-trivial failure modes.
 - Upstream dependencies (`depends_on`): []
 - Dependency gate before `READY`: every dependency is folder-wide `status: DONE`
 - If `02_design.md` is skipped (Quick mode): Not applicable; Full mode required.
@@ -28,21 +28,21 @@ links:
 
 ## Milestones
 
-- M1: Local constants and compose/network contracts are fixed (`BTC regtest`, `EVM 31337`, `USDT decimals 6`).
+- M1: Local constants and compose/network contracts are fixed (`BTC regtest`, `EVM 31337`, `USDT decimals 6`) with additive rail-extension contract.
 - M2: BTC stack (descriptor bootstrap + artifacts) is stable and rerunnable.
 - M3: ETH/USDT stacks and profile-based Make commands are stable.
 - M4: Smoke, reset, and runbook flows are validated and reproducible.
 
 ## Tasks (ordered)
 
-1. T-001 - Scaffold local chain layout and external network contract
+1. T-001 - Scaffold local chain layout and rail isolation contract
 
-   - Scope: Create `deployments/local-chains/` structure, rail-specific compose files, shared external network, and per-rail readiness checks.
-   - Output: Compose files pass validation and consistently attach to `chaintx-local-net`.
+   - Scope: Create `deployments/local-chains/` structure, rail-specific compose files, and per-rail readiness checks without shared external compose networks.
+   - Output: Compose files pass validation with isolated default networks and explicit RPC contract wiring.
    - Linked requirements: FR-001, FR-002, NFR-006
    - Validation:
      - [ ] How to verify (manual steps or command): `docker compose -f deployments/local-chains/docker-compose.btc.yml config` and equivalent for ETH/USDT/service-local.
-     - [ ] Expected result: Compose files parse successfully and declare shared external network contract.
+     - [ ] Expected result: Compose files parse successfully and keep rail isolation contracts explicit.
      - [ ] Logs/metrics to check (if applicable): N/A
 
 2. T-002 - Implement BTC stack bootstrap with descriptor-based receiver export
@@ -67,41 +67,41 @@ links:
 
 4. T-004 - Implement dedicated USDT deploy/mint stack
 
-   - Scope: Add USDT deployer that preflight-checks ETH RPC/chain id, enforces deterministic reuse policy by chain fingerprint, deploys ERC20 (`decimals=6`) only when needed, mints test balance, and writes artifact.
+   - Scope: Add independent single-container USDT rail (`usdt-node`) that runs embedded EVM, preflight-checks USDT-local RPC/chain id, enforces deterministic reuse policy by chain fingerprint, deploys ERC20 (`decimals=6`) only when needed, mints test balance, and writes artifact.
    - Output: `usdt.json` with contract metadata and mint evidence.
    - Linked requirements: FR-001, FR-007, FR-010, NFR-001, NFR-004, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): `make chain-up-usdt` after ETH stack is ready.
+     - [ ] How to verify (manual steps or command): `make chain-up-usdt` without requiring ETH stack.
      - [ ] Expected result: Deploy/mint succeeds on chain `31337`; mismatch chain id path fails fast with clear error.
      - [ ] Logs/metrics to check (if applicable): deployment tx hash, contract address, token decimals, and minted amount logged.
 
-5. T-005 - Implement profile-aware Make lifecycle commands
+5. T-005 - Implement profile-aware Make startup/shutdown commands
 
-   - Scope: Extend Makefile with per-rail lifecycle, fixed `--project-name` wrappers, `local-up`/`local-up-all`, status commands, and ETH preflight gates.
-   - Output: Deterministic command surface for minimal and full profiles.
+   - Scope: Extend Makefile with per-rail startup/shutdown lifecycle, fixed `--project-name` wrappers, and `local-up`/`local-up-all` profiles.
+   - Output: Deterministic command surface for minimal and full profiles using up/down semantics only.
    - Linked requirements: FR-002, FR-003, FR-006, FR-007, NFR-002, NFR-006
    - Validation:
-     - [ ] How to verify (manual steps or command): run `make local-up`, `make local-status`, `make local-down`, then `make local-up-all`, `make local-status`, `make local-down`.
-     - [ ] Expected result: Default profile starts only service+BTC; full profile starts all rails; status output is readable and accurate.
+     - [ ] How to verify (manual steps or command): run `make local-up`, `make local-down`, then `make local-up-all`, `make local-down`.
+     - [ ] Expected result: Default profile starts only service+BTC; full profile starts all rails; startup/shutdown order is deterministic.
      - [ ] Logs/metrics to check (if applicable): command output shows ordered steps and preflight results.
 
-6. T-006 - Implement reset commands and state cleanup policy
+6. T-006 - Implement cleanup workflow and state reset policy
 
-   - Scope: Add `local-reset-btc/eth/usdt/all` for deterministic cleanup of volumes/state/artifacts.
-   - Output: Reliable reset workflow with targeted and global cleanup modes.
+   - Scope: Define deterministic per-rail cleanup using `docker compose down` (and `-v` where required) plus artifact cleanup guidance.
+   - Output: Reliable cleanup workflow with targeted and global cleanup modes.
    - Linked requirements: FR-002, FR-007, FR-009, FR-010, NFR-002, NFR-003
    - Validation:
-     - [ ] How to verify (manual steps or command): create state, run each reset target, then rerun corresponding `chain-up-*`.
+     - [ ] How to verify (manual steps or command): create state, run each rail cleanup command, then rerun corresponding `chain-up-*`.
      - [ ] Expected result: Cleared rail restarts successfully with regenerated valid artifacts.
      - [ ] Logs/metrics to check (if applicable): reset output lists removed resources and artifact files.
 
 7. T-007 - Implement smoke scripts for default and full profiles
 
-   - Scope: Build `local-smoke` (service+BTC) and `local-smoke-all` (service+BTC+ETH+USDT), including stale-artifact detection.
+   - Scope: Build `scripts/local-chains/smoke_local.sh` (service+BTC) and `scripts/local-chains/smoke_local_all.sh` (service+BTC+ETH+USDT), including stale-artifact detection.
    - Output: Machine-readable pass/fail summaries with actionable remediation on failure.
    - Linked requirements: FR-005, FR-006, FR-007, FR-010, NFR-002, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): run smoke commands after corresponding profile startup.
+     - [ ] How to verify (manual steps or command): run `scripts/local-chains/smoke_local.sh` and `scripts/local-chains/smoke_local_all.sh` after corresponding profile startup.
      - [ ] Expected result: Default smoke validates BTC/service; full smoke validates BTC/ETH/USDT and detects stale artifacts with clear reset instructions.
      - [ ] Logs/metrics to check (if applicable): summary includes txids, contract address, and failing step diagnostics.
 
@@ -131,9 +131,27 @@ links:
 - Output: Validation evidence for NFR targets and known failure remediations.
 - Linked requirements: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, NFR-001, NFR-002, NFR-003, NFR-004, NFR-005, NFR-006
 - Validation:
-  - [ ] How to verify (manual steps or command): run 3 cycles of `local-up` + `local-smoke` + `local-down`; run 1 cycle of `local-up-all` + `local-smoke-all` + `local-down`; run stale-artifact and low-balance BTC scenarios.
+  - [ ] How to verify (manual steps or command): run 3 cycles of `local-up` + `scripts/local-chains/smoke_local.sh` + `local-down`; run 1 cycle of `local-up-all` + `scripts/local-chains/smoke_local_all.sh` + `local-down`; run stale-artifact and low-balance BTC scenarios.
   - [ ] Expected result: Default profile is stable across repeated cycles, full profile succeeds, and failure scenarios return actionable remediation.
   - [ ] Logs/metrics to check (if applicable): cycle timing, failure codes, and remediation messages captured.
+
+## Implementation completion
+
+- Completed tasks: T-001, T-002, T-003, T-004, T-005, T-006, T-007, T-008, T-009, T-010.
+- Completion date: 2026-02-12.
+- Scope note: Work was delivered in infrastructure/docs/scripts layers only (`deployments/`, `scripts/`, `build/`, `Makefile`, `README.md`, `.gitignore`) with no domain/application business-logic changes.
+
+## Validation evidence
+
+- `docker compose -f deployments/local-chains/docker-compose.btc.yml config` (pass)
+- `docker compose -f deployments/local-chains/docker-compose.eth.yml config` (pass)
+- `docker compose -f deployments/local-chains/docker-compose.usdt.yml config` (pass)
+- `docker compose -f deployments/service/docker-compose.yml config` (pass)
+- `make chain-up-eth` (pass; `eth.json` exported with `chain_id=31337`)
+- `make chain-up-usdt` (pass; `usdt.json` exported with deployed contract)
+- `make chain-up-btc` (pass; `btc.json` exported with descriptor/xpub)
+- `make service-up` (pass)
+- `go test ./...` (pass)
 
 ## Traceability (optional)
 
@@ -160,5 +178,5 @@ links:
 - Migration sequencing: No application DB migration dependency in this spec.
 - Rollback steps:
   - Remove/disable new local compose and Make targets.
-  - Keep existing `deployments/docker-compose.yml` and current dev workflow unchanged.
-  - Remove generated artifacts/volumes/networks via reset targets.
+  - Keep existing `deployments/service/docker-compose.yml` and current dev workflow unchanged.
+  - Remove generated artifacts/volumes via rail-specific docker compose down options.

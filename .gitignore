@@ -1,0 +1,4 @@
+# Foundry build cache for local chain contracts
+scripts/local-chains/contracts/cache/
+scripts/local-chains/contracts/out/
+scripts/local-chains/contracts/broadcast/

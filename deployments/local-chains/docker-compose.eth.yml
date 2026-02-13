@@ -1,0 +1,29 @@
+services:
+  eth-node:
+    image: ghcr.io/foundry-rs/foundry:latest
+    environment:
+      ANVIL_IP_ADDR: 0.0.0.0
+    command:
+      - anvil
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8545"
+      - --chain-id
+      - "${ETH_CHAIN_ID:-31337}"
+      - --mnemonic
+      - test test test test test test test test test test test junk
+      - --block-time
+      - "1"
+    ports:
+      - "${ETH_RPC_PORT:-8545}:8545"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
