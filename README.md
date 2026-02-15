@@ -43,14 +43,12 @@ make service-down
 - BTC local: `regtest` only
 - EVM local: `chain_id=31337`
 - USDT local token decimals: `6`
-- USDT local EVM RPC: `USDT_RPC_URL`（預設 `http://127.0.0.1:8546`）
 
 命名規則（build/deployments）：
 
 - `build/service/*`：service image build files
-- `build/local-chains/*`：local chain helper image build files
 - `deployments/service/*`：service stack compose
-- `deployments/local-chains/*`：chain rail compose（btc/eth/usdt）
+- `deployments/local-chains/*`：local chain compose（btc/eth）
 
 擴充規則（保持低耦合）：
 
@@ -70,6 +68,21 @@ make local-up
 - `service` stack（app + postgres）
 - `btc` stack（含 payer/receiver descriptor bootstrap）
 
+`local-up`/`local-up-all` 在啟動 `service` 時，會優先讀取 artifacts 並注入：
+
+- `deployments/local-chains/artifacts/btc.json` `receiver_xpub` -> `ks_btc_regtest`
+- `deployments/local-chains/artifacts/eth.json` `receiver_xpub` -> `ks_eth_local`
+- `ks_eth_sepolia` 使用固定 devtest keyset（不跟 local artifact 混用）
+
+此外，`service-up` 會同步 DB catalog：
+
+- 重建/修正 `ethereum/sepolia` baseline（固定 `chain_id=11155111`）
+- upsert `wallet_accounts(wa_eth_local_001 -> ks_eth_local)`
+- upsert `asset_catalog(ethereum/local/ETH)`（`chain_id=31337`）
+- upsert `asset_catalog(ethereum/local/USDT)`（`token_contract`/`token_decimals` 來自 `eth.json` 的 USDT 欄位）
+
+`ethereum/sepolia` rows 仍保留，不會被 local sync 覆蓋。
+
 全量 profile（需要 ETH + USDT 測試時）：
 
 ```bash
@@ -79,7 +92,7 @@ make local-up-all
 會額外啟動：
 
 - `eth` stack（anvil, chain id 31337）
-- `usdt` stack（單一 `usdt-node` 容器內含 anvil + deploy/mint, decimals=6）
+- `usdt` deploy step（`chain-up-eth` 內建一次性 `usdt-deployer`，把 USDT 合約部署到同一條 `eth-node` 鏈上）
 
 停止 profile：
 
@@ -102,15 +115,6 @@ ETH:
 make chain-up-eth
 make chain-down-eth
 ```
-
-USDT:
-
-```bash
-make chain-up-usdt
-make chain-down-usdt
-```
-
-`chain-up-usdt` 會啟動單一 `usdt-node`（內含 USDT 專用 EVM，預設 host `:8546`），等待 deploy/healthcheck 完成後常駐執行。
 
 Service:
 
@@ -171,9 +175,163 @@ curl -i \
   }'
 ```
 
+## Local Manual Receive Test Runbook
+
+以下流程可完整驗證「服務產生收款地址」與「鏈上實際收到款」。
+
+### 1. 啟動所有必要服務
+
+```bash
+make local-up-all
+```
+
+確認狀態：
+
+```bash
+docker ps --format "{{.Names}}\t{{.Status}}" | rg '^chaintx-local-'
+curl -sS http://127.0.0.1:8080/healthz
+curl -sS http://127.0.0.1:8080/v1/assets | jq
+```
+
+### 2. BTC（regtest）手動收款測試
+
+建立 BTC payment request：
+
+```bash
+PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"chain":"bitcoin","network":"regtest","asset":"BTC","expected_amount_minor":"50000"}')
+
+PR_ID=$(echo "$PR" | jq -r '.id')
+BTC_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
+echo "$PR" | jq '{id,status,address:.payment_instructions.address}'
+```
+
+從 payer wallet 轉帳到收款地址：
+
+```bash
+TXID=$(docker compose -f deployments/local-chains/docker-compose.btc.yml \
+  --project-name chaintx-local-btc \
+  exec -T btc-node bitcoin-cli -regtest -rpcuser=chaintx -rpcpassword=chaintx \
+  -rpcwallet=chaintx-btc-payer sendtoaddress "$BTC_ADDR" 0.001)
+
+echo "$TXID"
+```
+
+挖 1 個區塊確認交易：
+
+```bash
+MINE_ADDR=$(docker compose -f deployments/local-chains/docker-compose.btc.yml \
+  --project-name chaintx-local-btc \
+  exec -T btc-node bitcoin-cli -regtest -rpcuser=chaintx -rpcpassword=chaintx \
+  -rpcwallet=chaintx-btc-payer getnewaddress "" bech32 | tr -d '\r')
+
+docker compose -f deployments/local-chains/docker-compose.btc.yml \
+  --project-name chaintx-local-btc \
+  exec -T btc-node bitcoin-cli -regtest -rpcuser=chaintx -rpcpassword=chaintx \
+  -rpcwallet=chaintx-btc-payer generatetoaddress 1 "$MINE_ADDR" >/dev/null
+
+docker compose -f deployments/local-chains/docker-compose.btc.yml \
+  --project-name chaintx-local-btc \
+  exec -T btc-node bitcoin-cli -regtest -rpcuser=chaintx -rpcpassword=chaintx \
+  -rpcwallet=chaintx-btc-payer gettransaction "$TXID" | jq '{txid,confirmations,details}'
+```
+
+回查 payment request：
+
+```bash
+curl -sS "http://127.0.0.1:8080/v1/payment-requests/$PR_ID" | jq
+```
+
+### 3. ETH（local EVM）手動收款測試
+
+建立 ETH payment request：
+
+```bash
+PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"chain":"ethereum","network":"local","asset":"ETH","expected_amount_minor":"1000000000000000"}')
+
+ETH_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
+echo "$PR" | jq '{id,status,address:.payment_instructions.address}'
+```
+
+轉 0.001 ETH 到收款地址：
+
+```bash
+docker compose -f deployments/local-chains/docker-compose.eth.yml \
+  --project-name chaintx-local-eth \
+  exec -T eth-node cast send \
+  --rpc-url http://127.0.0.1:8545 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  "$ETH_ADDR" --value 1000000000000000 --json | jq -r '.transactionHash'
+```
+
+檢查收款地址餘額：
+
+```bash
+docker compose -f deployments/local-chains/docker-compose.eth.yml \
+  --project-name chaintx-local-eth \
+  exec -T eth-node cast balance --rpc-url http://127.0.0.1:8545 "$ETH_ADDR"
+```
+
+### 4. USDT（ERC20）手動收款測試
+
+建立 USDT payment request：
+
+```bash
+PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"chain":"ethereum","network":"local","asset":"USDT","expected_amount_minor":"1000000"}')
+
+USDT_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
+echo "$PR" | jq '{id,status,address:.payment_instructions.address}'
+```
+
+讀取 USDT 合約地址並轉 1 USDT（`1000000`，decimals=6）：
+
+```bash
+USDT_CONTRACT=$(jq -r '.usdt_contract_address' deployments/local-chains/artifacts/eth.json)
+
+docker compose -f deployments/local-chains/docker-compose.eth.yml \
+  --project-name chaintx-local-eth \
+  exec -T eth-node cast send \
+  --rpc-url http://127.0.0.1:8545 \
+  --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  "$USDT_CONTRACT" "transfer(address,uint256)" "$USDT_ADDR" 1000000 --json | jq -r '.transactionHash'
+```
+
+檢查收款地址 USDT 餘額：
+
+```bash
+docker compose -f deployments/local-chains/docker-compose.eth.yml \
+  --project-name chaintx-local-eth \
+  exec -T eth-node cast call \
+  --rpc-url http://127.0.0.1:8545 \
+  "$USDT_CONTRACT" "balanceOf(address)(uint256)" "$USDT_ADDR"
+```
+
+### 5. 一鍵 smoke（可選）
+
+```bash
+scripts/local-chains/smoke_local_all.sh
+```
+
+輸出檔案：
+
+- `deployments/local-chains/artifacts/smoke-local.json`
+- `deployments/local-chains/artifacts/smoke-local-all.json`
+
+### 6. 關閉
+
+```bash
+make local-down
+```
+
 ## Troubleshooting
 
-- `chain-up-usdt` 失敗且訊息為 chain mismatch：重跑 `make chain-down-usdt && make chain-up-usdt`（USDT rail 與 ETH rail 已分離，不需依賴 `chain-up-eth`）。
-- `chain-up-usdt` 或 full smoke 顯示 USDT stale artifact：執行 `make chain-down-usdt && make chain-up-usdt`。
+- `chain-up-eth` 失敗且訊息為 chain mismatch：確認 `eth-node` chain id 為 `31337`，再重跑 `make chain-down-eth && make chain-up-eth`。
+- full smoke 顯示 USDT stale artifact：執行 `make chain-down-eth && make chain-up-eth`（會重建 ETH+USDT artifacts）。
+- `service-up` 顯示 `invalid eth artifact usdt_*`：先重跑 `make chain-down-eth && make chain-up-eth`，再執行 `make service-up`。
 - BTC 餘額不足：重跑 `make chain-up-btc`（bootstrap 會自動補挖）。
 - 服務啟動失敗：用 `docker compose -f deployments/service/docker-compose.yml --project-name chaintx-local-service logs app postgres` 檢查詳細訊息。

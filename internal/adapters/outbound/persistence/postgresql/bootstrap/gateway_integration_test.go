@@ -27,6 +27,7 @@ func TestPersistenceBootstrapGatewayIntegration(t *testing.T) {
 		"ks_btc_regtest": "tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5",
 		"ks_btc_testnet": "vpub5Xzfrm6ouSBPKVriRpkXyai4mvsHjRHq28wxS1znBCdwzLzeJUx8ruJeBnCMKs1AyqYsJ2mriQHuzxNoFtkkq94J4bJyNjGXkbZ8vCYwUy3",
 		"ks_eth_sepolia": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+		"ks_eth_local":   "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
 	}
 	rawKeysets := os.Getenv("TEST_DEVTEST_KEYSETS_JSON")
 	if rawKeysets != "" {

@@ -180,6 +180,50 @@ func TestCreatePaymentRequestUseCaseExecuteRejectsGatewayMetadataMismatch(t *tes
 	}
 }
 
+func TestCreatePaymentRequestUseCasePassesCatalogChainIDToGateway(t *testing.T) {
+	readModel := fakeAssetCatalogReadModel{
+		entries: []dto.AssetCatalogEntry{
+			{
+				Chain:                   "ethereum",
+				Network:                 "local",
+				Asset:                   "ETH",
+				MinorUnit:               "wei",
+				Decimals:                18,
+				AddressScheme:           "evm_bip44",
+				DefaultExpiresInSeconds: 3600,
+				WalletAccountID:         "wa_eth_local_001",
+				ChainID:                 int64Ptr(31337),
+			},
+		},
+	}
+
+	repository := &fakePaymentRequestRepository{}
+	var capturedChainID *int64
+	walletGateway := &fakeWalletAllocationGateway{
+		onDerive: func(input portsout.DeriveAddressInput) {
+			capturedChainID = input.ChainID
+		},
+		result: portsout.DerivedAddress{
+			AddressRaw:    "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+			AddressScheme: "evm_bip44",
+			ChainID:       int64Ptr(31337),
+		},
+	}
+
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()})
+	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
+		Chain:   "ethereum",
+		Network: "local",
+		Asset:   "ETH",
+	})
+	if appErr != nil {
+		t.Fatalf("expected success, got %+v", appErr)
+	}
+	if capturedChainID == nil || *capturedChainID != 31337 {
+		t.Fatalf("expected gateway input chain id 31337, got %+v", capturedChainID)
+	}
+}
+
 func TestHashCreateRequestDeterministicForEquivalentJSON(t *testing.T) {
 	first, appErr := hashCreateRequest(createRequestHashInput{
 		Chain:            "bitcoin",

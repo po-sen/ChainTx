@@ -34,17 +34,17 @@ links:
 
 ## Functional requirements
 
-### FR-001 - Provide separated compose files per rail
+### FR-001 - Provide separated compose files per chain runtime
 
-- Description: Repository must include independent compose files for BTC, ETH, and USDT local stacks.
+- Description: Repository must include independent compose files for BTC and ETH local chain stacks, with USDT deploy utility colocated in ETH compose.
 - Acceptance criteria:
-  - [ ] AC1: Compose files exist under `deployments/local-chains/` with explicit per-rail naming (`docker-compose.btc.yml`, `docker-compose.eth.yml`, `docker-compose.usdt.yml`).
-  - [ ] AC2: Each rail compose can be started and stopped independently without requiring all other rails to run.
+  - [ ] AC1: Compose files exist under `deployments/local-chains/` with explicit naming (`docker-compose.btc.yml`, `docker-compose.eth.yml`).
+  - [ ] AC2: BTC and ETH compose stacks can be started/stopped independently.
   - [ ] AC3: Readiness checks are explicit and deterministic per rail:
     - BTC ready: `getblockchaininfo` succeeds and `initialblockdownload=false`.
     - ETH ready: JSON-RPC `eth_chainId` and `eth_blockNumber` succeed.
-    - USDT ready: deploy artifact exists and contract readiness check succeeds (deployment receipt or `balanceOf` probe).
-  - [ ] AC4: USDT compose is separate from ETH compose and references ETH RPC via explicit configuration.
+    - USDT ready: deploy artifact exists and contract readiness check succeeds against ETH local RPC (`eth-node`) (deployment receipt or `balanceOf` probe).
+  - [ ] AC4: USDT deploy utility (`usdt-deployer`) runs from ETH compose, references ETH RPC via explicit configuration, and does not start a second EVM node.
   - [ ] AC5: Rail compose files are isolated by default and do not require a shared external docker network.
   - [ ] AC6: Cross-rail dependency contracts use explicit RPC endpoint configuration (for example `ETH_RPC_URL`) instead of compose service DNS coupling.
   - [ ] AC7: Rail extension follows Open/Closed style: adding a new rail (for example `usdt-tron`) is done by adding a new compose file and new `chain-up/down-*` targets, without changing existing BTC/ETH/USDT rail contracts.
@@ -54,16 +54,15 @@ links:
 
 - Description: Makefile must expose only startup/shutdown lifecycle commands for rails and local profiles.
 - Acceptance criteria:
-  - [ ] AC1: Make targets include per-rail `up/down` commands for BTC, ETH, and USDT stacks.
+  - [ ] AC1: Make targets include per-rail `up/down` commands for BTC/ETH stacks.
   - [ ] AC2: Make targets include profile commands:
     - `local-up` / `local-down` (default minimal profile: service + BTC)
-    - `local-up-all` / `local-down` (optional full profile: service + BTC + ETH + USDT)
-  - [ ] AC3: `chain-up-usdt` uses explicit `ETH_RPC_URL` contract and fails fast when ETH RPC is unreachable or chain id is unexpected.
+    - `local-up-all` / `local-down` (optional full profile: service + BTC + ETH + USDT deploy)
+  - [ ] AC3: `chain-up-eth` includes USDT deploy step and fails fast when ETH RPC is unreachable or chain id is unexpected.
   - [ ] AC4: Commands are idempotent (re-running `up` does not create duplicate critical resources or fatal conflicts).
   - [ ] AC5: Each Make wrapper uses fixed compose project names via `docker compose --project-name`:
     - BTC: `chaintx-local-btc`
     - ETH: `chaintx-local-eth`
-    - USDT: `chaintx-local-usdt`
     - Service: `chaintx-local-service`
 - Notes: Service lifecycle is standardized on `service-up` / `service-down` targets.
 
@@ -110,19 +109,20 @@ links:
   - [ ] AC3: Local EVM chain id is fixed and enforced as `31337` across compose config, scripts, and artifacts.
 - Notes: Implementation can use Anvil/Hardhat/Ganache as long as behavior is deterministic and scripted.
 
-### FR-007 - Deploy and seed USDT contract via dedicated stack
+### FR-007 - Deploy and seed USDT contract on ETH local chain
 
-- Description: USDT rail stack must deploy ERC20-compatible contract to local EVM and mint test balances.
+- Description: USDT deployment unit must deploy ERC20-compatible contract to ETH local EVM and mint test balances.
 - Acceptance criteria:
-  - [ ] AC1: USDT stack performs contract deployment against ETH local RPC and stores deployed contract address as artifact.
+  - [ ] AC1: USDT deployment step performs contract deployment against ETH local RPC and stores deployed contract address as artifact.
   - [ ] AC2: USDT stack mints configurable test balance to payer account used in smoke workflow.
   - [ ] AC3: Contract metadata needed by tests (`contract_address`, `token_decimals`, `chain_id`) is emitted in machine-readable output with fixed values `token_decimals=6` and `chain_id=31337`.
   - [ ] AC4: Re-running deployment path is deterministic (reuse existing deployment artifact or follow documented reset behavior).
   - [ ] AC5: Deployment/mint flow fails fast when chain id mismatches the expected local value (`31337`).
+  - [ ] AC5.1: `chain-up-eth` includes USDT deploy step and performs ETH readiness preflight first.
   - [ ] AC6: Deterministic deploy policy is fixed:
-    - if `usdt.json` exists and chain fingerprint matches current ETH chain (`chain_id + genesis_block_hash`), skip redeploy and reuse artifact
-    - if fingerprint mismatches, fail with explicit remediation (`chain-down-usdt` then `chain-up-usdt`)
-- Notes: USDT compose remains a separate operational unit even though it depends on ETH RPC.
+    - if `eth.json.usdt_contract_address` exists and chain fingerprint matches current ETH chain (`chain_id + genesis_block_hash`), skip redeploy and reuse artifact
+    - if fingerprint mismatches, fail with explicit remediation (`chain-down-eth` then `chain-up-eth`)
+- Notes: USDT deploy utility is colocated in ETH compose and executes as one-shot initialization.
 
 ### FR-008 - Keep local simulation changes isolated from core application logic
 
@@ -138,7 +138,7 @@ links:
 - Description: README (or dedicated local-runbook doc) must document setup, commands, and troubleshooting.
 - Acceptance criteria:
   - [ ] AC1: Docs list prerequisites, per-stack commands, fixed local constants (`BTC regtest`, `EVM 31337`, `USDT decimals 6`), and artifact file locations.
-  - [ ] AC2: Docs include a minimal startup/shutdown sequence (default profile: service + BTC) and an optional full sequence (service + BTC + ETH + USDT).
+  - [ ] AC2: Docs include a minimal startup/shutdown sequence (default profile: service + BTC) and an optional full sequence (service + BTC + ETH with embedded USDT deploy step).
   - [ ] AC3: Docs include common failure diagnostics (port conflict, RPC unreachable, wallet init failure, contract deploy failure, stale artifact mismatch).
   - [ ] AC4: Docs include cleanup strategy usage and when to run per-rail `down` commands with data removal options.
   - [ ] AC5: Docs include `.gitignore` rules for generated local artifact/key files.
@@ -148,11 +148,11 @@ links:
 
 - Description: Bootstrap and deploy scripts must produce stable artifact schemas and detect stale cross-stack state before smoke actions.
 - Acceptance criteria:
-  - [ ] AC1: Each artifact (`btc.json`, `eth.json`, `usdt.json`) contains at least `schema_version`, `generated_at`, `network`, `compose_project`, and rail-specific runtime fields.
-  - [ ] AC1.1: `compose_project` field must exactly equal the fixed Make wrapper project names (`chaintx-local-btc|eth|usdt|service` as applicable).
-  - [ ] AC1.2: ETH and USDT artifacts must include `genesis_block_hash` for chain fingerprint checks.
+  - [ ] AC1: Each artifact (`btc.json`, `eth.json`) contains at least `schema_version`, `generated_at`, `network`, `compose_project`, and rail-specific runtime fields.
+  - [ ] AC1.1: `compose_project` field must exactly equal fixed Make wrapper project names (`chaintx-local-btc|eth|service`) as applicable.
+  - [ ] AC1.2: `eth.json` must include `genesis_block_hash` and embedded USDT metadata fields (`usdt_contract_address`, `usdt_token_decimals`) for chain fingerprint and token checks.
   - [ ] AC2: Artifacts include `warnings` array (may be empty) for non-fatal conditions.
-  - [ ] AC3: `scripts/local-chains/smoke_local_all.sh` detects stale USDT artifact after ETH reset/restart using `chain_id + genesis_block_hash` fingerprint and returns actionable remediation (for example run `chain-down-usdt` then `chain-up-usdt`).
+  - [ ] AC3: `scripts/local-chains/smoke_local_all.sh` detects stale ETH/USDT metadata after ETH reset/restart using `chain_id + genesis_block_hash` fingerprint and returns actionable remediation (for example run `chain-down-eth` then `chain-up-eth`).
   - [ ] AC4: Artifact consumers fail fast with explicit errors when required fields are missing or malformed.
 - Notes: Artifact schema version starts at `1`.
 

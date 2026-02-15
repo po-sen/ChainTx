@@ -13,6 +13,7 @@ type DeriveAddressInput struct {
 	KeysetID               string
 	DerivationPathTemplate string
 	DerivationIndex        int64
+	ChainID                *int64
 }
 
 type DerivedAddress struct {

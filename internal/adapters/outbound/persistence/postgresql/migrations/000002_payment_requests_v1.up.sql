@@ -144,6 +144,15 @@ VALUES
     '0/{index}',
     0,
     TRUE
+  ),
+  (
+    'wa_eth_local_001',
+    'ethereum',
+    'local',
+    'ks_eth_local',
+    '0/{index}',
+    0,
+    TRUE
   )
 ON CONFLICT (id) DO UPDATE
 SET
@@ -242,6 +251,42 @@ VALUES
     3600,
     TRUE,
     'spec:2026-02-10-wallet-allocation-asset-catalog',
+    'system',
+    now()
+  ),
+  (
+    'ethereum',
+    'local',
+    'ETH',
+    'wa_eth_local_001',
+    'wei',
+    18,
+    'evm_bip44',
+    31337,
+    NULL,
+    NULL,
+    NULL,
+    3600,
+    TRUE,
+    'spec:2026-02-14-local-chain-db-runtime-profile',
+    'system',
+    now()
+  ),
+  (
+    'ethereum',
+    'local',
+    'USDT',
+    'wa_eth_local_001',
+    'token_minor',
+    6,
+    'evm_bip44',
+    31337,
+    'ERC20',
+    '0x0000000000000000000000000000000000000001',
+    6,
+    3600,
+    TRUE,
+    'spec:2026-02-14-local-chain-db-runtime-profile',
     'system',
     now()
   )

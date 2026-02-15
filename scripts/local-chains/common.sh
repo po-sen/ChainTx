@@ -9,12 +9,10 @@ LOCAL_CHAIN_ARTIFACT_DIR="${LOCAL_CHAIN_ARTIFACT_DIR:-$REPO_ROOT/deployments/loc
 
 LOCAL_BTC_PROJECT="${LOCAL_BTC_PROJECT:-chaintx-local-btc}"
 LOCAL_ETH_PROJECT="${LOCAL_ETH_PROJECT:-chaintx-local-eth}"
-LOCAL_USDT_PROJECT="${LOCAL_USDT_PROJECT:-chaintx-local-usdt}"
 LOCAL_SERVICE_PROJECT="${LOCAL_SERVICE_PROJECT:-chaintx-local-service}"
 
 BTC_COMPOSE_FILE="${BTC_COMPOSE_FILE:-$REPO_ROOT/deployments/local-chains/docker-compose.btc.yml}"
 ETH_COMPOSE_FILE="${ETH_COMPOSE_FILE:-$REPO_ROOT/deployments/local-chains/docker-compose.eth.yml}"
-USDT_COMPOSE_FILE="${USDT_COMPOSE_FILE:-$REPO_ROOT/deployments/local-chains/docker-compose.usdt.yml}"
 SERVICE_COMPOSE_FILE="${SERVICE_COMPOSE_FILE:-$REPO_ROOT/deployments/service/docker-compose.yml}"
 
 BTC_RPC_USER="${BTC_RPC_USER:-chaintx}"

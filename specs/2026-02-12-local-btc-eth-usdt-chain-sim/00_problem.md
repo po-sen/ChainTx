@@ -27,7 +27,7 @@ links:
 ## Constraints (optional)
 
 - Technical constraints: Keep this work isolated from business/domain logic; focus on local infra, scripts, and developer workflow.
-- Technical constraints: BTC, ETH, and USDT rails must be started via separate Docker Compose files.
+- Technical constraints: BTC/ETH chain nodes use separate Docker Compose files; USDT local flow is a dedicated deploy step that targets the ETH local chain (no second EVM node).
 - Technical constraints: Provide Makefile orchestration with resource-aware profiles (`local-up` minimal, `local-up-all` optional full stack).
 - Technical constraints: Rails must be network-isolated by default; cross-rail calls use explicit host-level RPC contracts (not shared compose network aliases).
 - Technical constraints: New rails (for example `usdt-tron`) must be additive and must not force runtime-contract changes in existing rails.
@@ -45,7 +45,7 @@ links:
 ## Goals
 
 - G1: Provide local chain simulation stacks for BTC, ETH, and USDT usage in ChainTx.
-- G2: Ensure each rail is controlled by a separate Docker Compose file, with independent up/down lifecycle.
+- G2: Ensure each chain/deploy unit is controlled by predictable compose+Make commands, with independent lifecycle where applicable.
 - G3: Bootstrap two BTC wallets automatically: one funded payer wallet and one receiver wallet used to export descriptor/xpub artifacts for receiving flow tests.
 - G4: Start ChainTx service in local mode and enable quick smoke verification through Makefile commands.
 - G5: Produce deterministic artifacts (RPC endpoints, wallet metadata, xpub, contract address) for test reuse.
@@ -65,7 +65,7 @@ links:
 - A1: Local BTC simulation baseline is `regtest` only.
 - A2: Local EVM simulation baseline uses `chain_id=31337`.
 - A3: Local USDT ERC20 contract baseline uses `token_decimals=6`.
-- A4: USDT local stack can depend on ETH local RPC endpoint while still being managed by its own compose file.
+- A4: USDT local deployment step depends on ETH local RPC endpoint and must not start a second local EVM chain.
 - A5: Cross-rail dependency contract uses host-level RPC endpoint configuration (for example `ETH_RPC_URL`) instead of shared compose network DNS.
 - A6: Team accepts deterministic test keys/artifacts stored in local-only files ignored by git.
 - A7: Docker Engine + Docker Compose plugin are available in developer machines.
@@ -83,6 +83,6 @@ links:
 - Metric: BTC wallet bootstrap
 - Target: One command creates payer wallet and receiver descriptor/xpub wallet data, funds payer on regtest, and writes artifact output without manual CLI steps.
 - Metric: Stack isolation
-- Target: `make chain-up-btc`, `make chain-up-eth`, and `make chain-up-usdt` can run independently and can be stopped independently.
+- Target: `make chain-up-btc` and `make chain-up-eth` are independent chain lifecycles; `chain-up-eth` includes idempotent USDT initialization on top of ETH local chain.
 - Metric: Local validation coverage
 - Target: `scripts/local-chains/smoke_local.sh` validates default profile; `scripts/local-chains/smoke_local_all.sh` validates full-profile BTC/ETH/USDT checks with deterministic pass/fail summary.

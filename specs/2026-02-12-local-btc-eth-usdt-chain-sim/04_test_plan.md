@@ -21,7 +21,7 @@ links:
 
 - Covered:
   - Rail-level compose separation and lifecycle commands (BTC/ETH/USDT).
-  - Default profile (`service + BTC`) and optional full profile (`service + BTC + ETH + USDT`).
+  - Default profile (`service + BTC`) and optional full profile (`service + BTC + ETH + USDT deploy`).
   - BTC descriptor/xpub bootstrap and payment smoke flow.
   - ETH local RPC readiness and chain-id guard (`31337`).
   - USDT local ERC20 deployment/mint with `token_decimals=6`.
@@ -79,11 +79,11 @@ links:
   - Steps: `make chain-up-eth`, query `eth_chainId` and `eth_blockNumber`, then `make chain-down-eth`.
   - Expected: ETH RPC is reachable and `eth_chainId == 0x7a69` (`31337`).
 
-- TC-103: USDT stack independent lifecycle (self-contained EVM rail)
+- TC-103: USDT deploy utility lifecycle on ETH chain
 
   - Linked requirements: FR-001, FR-007, NFR-001, NFR-004
-  - Steps: Run `make chain-up-usdt`; verify USDT rail RPC readiness plus artifact/token metadata.
-  - Expected: USDT deploy succeeds only on expected chain and outputs `token_decimals=6`, `chain_id=31337`.
+  - Steps: Run `make chain-up-eth`; verify artifact/token metadata and on-chain contract code through ETH RPC.
+  - Expected: USDT deploy succeeds only on expected ETH chain and outputs `token_decimals=6`, `chain_id=31337`.
 
 - TC-104: Service startup with default profile
 
@@ -122,24 +122,24 @@ links:
   - Steps: Execute 1 cycle of `make local-up-all` -> `scripts/local-chains/smoke_local_all.sh` -> `make local-down`.
   - Expected: Full profile passes one complete cycle with deterministic artifacts.
 
-- TC-203: Stale artifact detection after USDT rail reset
+- TC-203: Stale artifact detection after ETH chain reset
   - Linked requirements: FR-010, FR-007, FR-002, NFR-002, NFR-005
   - Steps:
     - Run full profile once.
-    - Execute `docker compose -f deployments/local-chains/docker-compose.usdt.yml --project-name chaintx-local-usdt down -v` only.
-    - Start USDT rail again without cleaning stale artifact file.
+    - Execute `make chain-down-eth && make chain-up-eth` only.
+    - Keep stale `eth.json` USDT metadata without redeploy.
     - Run `scripts/local-chains/smoke_local_all.sh`.
-  - Expected: Smoke fails fast when `chain_id + genesis_block_hash` fingerprint mismatches and returns actionable remediation (for example `chain-down-usdt` then `chain-up-usdt`).
+  - Expected: Smoke fails fast when `chain_id + genesis_block_hash` fingerprint mismatches and returns actionable remediation (for example `chain-down-eth` then `chain-up-eth`).
 
 ## Edge cases and failure modes
 
 - Case: BTC RPC port conflict on host.
 - Expected behavior: `chain-up-btc` fails fast with clear port binding error and remediation hint.
 
-- Case: USDT rail EVM service is down while `usdt-node` starts.
-- Expected behavior: USDT node retries/waits up to limit, then exits with explicit dependency failure.
+- Case: ETH RPC is unavailable while `chain-up-eth` executes deploy phase.
+- Expected behavior: USDT deploy step exits quickly with explicit dependency failure and remediation (`make chain-down-eth && make chain-up-eth`).
 
-- Case: USDT rail reset causes stale USDT artifact.
+- Case: ETH chain reset causes stale USDT artifact.
 - Expected behavior: Full smoke detects mismatch and prints precise reset workflow.
 
 - Case: BTC bootstrap rerun with insufficient spendable balance or wallet lock state.

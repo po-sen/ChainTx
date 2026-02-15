@@ -101,6 +101,87 @@ func TestPaymentRequestRepositoryCreateIntegrationSmokeByAsset(t *testing.T) {
 	}
 }
 
+func TestPaymentRequestRepositoryCreateIntegrationSmokeByAssetLocalEVM(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+
+	testCases := []struct {
+		chain   string
+		network string
+		asset   string
+	}{
+		{chain: "ethereum", network: "local", asset: "ETH"},
+		{chain: "ethereum", network: "local", asset: "USDT"},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(fmt.Sprintf("%s-%s-%s", testCase.chain, testCase.network, testCase.asset), func(t *testing.T) {
+			harness.resetState(t)
+
+			catalog := harness.mustAssetCatalogEntry(t, testCase.chain, testCase.network, testCase.asset)
+			resourceID := fmt.Sprintf("pr_smoke_%s_%s_%s", testCase.chain, testCase.network, strings.ToLower(testCase.asset))
+			idempotencyKey := fmt.Sprintf("smoke-%s-%s-%s", testCase.chain, testCase.network, strings.ToLower(testCase.asset))
+			command := newCreatePersistenceCommand(catalog, resourceID, idempotencyKey, "hash-smoke-local", time.Now().UTC())
+
+			result, appErr := harness.repository.Create(context.Background(), command, deterministicResolver)
+			if appErr != nil {
+				t.Fatalf("expected create success, got %+v", appErr)
+			}
+			if result.Resource.PaymentInstructions.ChainID == nil || *result.Resource.PaymentInstructions.ChainID != 31337 {
+				t.Fatalf("expected local chain id 31337, got %+v", result.Resource.PaymentInstructions.ChainID)
+			}
+		})
+	}
+}
+
+func TestPaymentRequestRepositoryCreateIntegrationEVMCursorIsolationByNetwork(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+	harness.resetState(t)
+
+	sepoliaCatalog := harness.mustAssetCatalogEntry(t, "ethereum", "sepolia", "ETH")
+	localCatalog := harness.mustAssetCatalogEntry(t, "ethereum", "local", "ETH")
+
+	if sepoliaCatalog.WalletAccountID == localCatalog.WalletAccountID {
+		t.Fatalf("expected distinct wallet accounts for sepolia/local, got %s", sepoliaCatalog.WalletAccountID)
+	}
+
+	_, appErr := harness.repository.Create(
+		context.Background(),
+		newCreatePersistenceCommand(sepoliaCatalog, "pr_sepolia_001", "idem-sepolia-001", "hash-sepolia-001", time.Now().UTC()),
+		deterministicResolver,
+	)
+	if appErr != nil {
+		t.Fatalf("expected sepolia create success, got %+v", appErr)
+	}
+
+	_, appErr = harness.repository.Create(
+		context.Background(),
+		newCreatePersistenceCommand(localCatalog, "pr_local_001", "idem-local-001", "hash-local-001", time.Now().UTC()),
+		deterministicResolver,
+	)
+	if appErr != nil {
+		t.Fatalf("expected local create success, got %+v", appErr)
+	}
+
+	_, appErr = harness.repository.Create(
+		context.Background(),
+		newCreatePersistenceCommand(localCatalog, "pr_local_002", "idem-local-002", "hash-local-002", time.Now().UTC()),
+		deterministicResolver,
+	)
+	if appErr != nil {
+		t.Fatalf("expected second local create success, got %+v", appErr)
+	}
+
+	sepoliaNextIndex := harness.mustWalletNextIndex(t, sepoliaCatalog.WalletAccountID)
+	localNextIndex := harness.mustWalletNextIndex(t, localCatalog.WalletAccountID)
+	if sepoliaNextIndex != 1 {
+		t.Fatalf("expected sepolia next_index=1, got %d", sepoliaNextIndex)
+	}
+	if localNextIndex != 2 {
+		t.Fatalf("expected local next_index=2, got %d", localNextIndex)
+	}
+}
+
 func TestPaymentRequestRepositoryCreateIntegrationIdempotencyReplay(t *testing.T) {
 	harness := newRepositoryIntegrationHarness(t)
 	harness.resetState(t)

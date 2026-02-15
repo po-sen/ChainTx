@@ -12,7 +12,6 @@ require_cmd docker
 "$SCRIPT_DIR/smoke_local.sh"
 
 ETH_ARTIFACT_FILE="${ETH_ARTIFACT_FILE:-$LOCAL_CHAIN_ARTIFACT_DIR/eth.json}"
-USDT_ARTIFACT_FILE="${USDT_ARTIFACT_FILE:-$LOCAL_CHAIN_ARTIFACT_DIR/usdt.json}"
 SMOKE_ALL_ARTIFACT_FILE="${SMOKE_ALL_ARTIFACT_FILE:-$LOCAL_CHAIN_ARTIFACT_DIR/smoke-local-all.json}"
 
 if [ ! -f "$ETH_ARTIFACT_FILE" ]; then
@@ -20,25 +19,31 @@ if [ ! -f "$ETH_ARTIFACT_FILE" ]; then
   exit 1
 fi
 
-if [ ! -f "$USDT_ARTIFACT_FILE" ]; then
-  echo "missing USDT artifact: $USDT_ARTIFACT_FILE (run make chain-up-usdt first)" >&2
-  exit 1
-fi
-
 eth_chain_id="$(jq -r '.chain_id' "$ETH_ARTIFACT_FILE")"
 eth_genesis="$(jq -r '.genesis_block_hash' "$ETH_ARTIFACT_FILE")"
-eth_private_key="$(jq -r '.payer_private_key' "$ETH_ARTIFACT_FILE")"
-eth_payer_address="$(jq -r '.payer_address' "$ETH_ARTIFACT_FILE")"
+eth_rpc_url="$(jq -r '.rpc_url // empty' "$ETH_ARTIFACT_FILE")"
+eth_private_key="$(jq -r '.payer_private_key // empty' "$ETH_ARTIFACT_FILE")"
+eth_payer_address="$(jq -r '.payer_address // empty' "$ETH_ARTIFACT_FILE")"
 eth_recipient_address="${ETH_RECIPIENT_ADDRESS:-$ANVIL_SECOND_ADDRESS}"
 
-usdt_chain_id="$(jq -r '.chain_id' "$USDT_ARTIFACT_FILE")"
-usdt_genesis="$(jq -r '.genesis_block_hash' "$USDT_ARTIFACT_FILE")"
-usdt_rpc_url="$(jq -r '.rpc_url' "$USDT_ARTIFACT_FILE")"
-usdt_private_key="$(jq -r '.payer_private_key // empty' "$USDT_ARTIFACT_FILE")"
-usdt_payer_address="$(jq -r '.payer_address // empty' "$USDT_ARTIFACT_FILE")"
-usdt_contract="$(jq -r '.contract_address' "$USDT_ARTIFACT_FILE")"
+usdt_rpc_url="$eth_rpc_url"
+usdt_private_key="$eth_private_key"
+usdt_payer_address="$eth_payer_address"
+usdt_contract="$(jq -r '.usdt_contract_address // empty' "$ETH_ARTIFACT_FILE")"
 usdt_recipient_address="${USDT_RECIPIENT_ADDRESS:-$ANVIL_SECOND_ADDRESS}"
 usdt_transfer_amount="${USDT_TRANSFER_AMOUNT:-1000000}"
+
+if [ -z "$usdt_rpc_url" ] || [ "$usdt_rpc_url" = "null" ]; then
+  usdt_rpc_url="$ETH_RPC_URL"
+fi
+
+if [ -z "$eth_private_key" ]; then
+  eth_private_key="$ANVIL_DEFAULT_PRIVATE_KEY"
+fi
+
+if [ -z "$eth_payer_address" ]; then
+  eth_payer_address="$ANVIL_DEFAULT_ADDRESS"
+fi
 
 eth_dc() {
   dc "$ETH_COMPOSE_FILE" "$LOCAL_ETH_PROJECT" "$@"
@@ -46,14 +51,6 @@ eth_dc() {
 
 eth_cast() {
   eth_dc exec -T eth-node cast "$@"
-}
-
-usdt_dc() {
-  dc "$USDT_COMPOSE_FILE" "$LOCAL_USDT_PROJECT" "$@"
-}
-
-usdt_cast() {
-  usdt_dc exec -T usdt-node cast "$@"
 }
 
 actual_eth_chain_id="$(eth_cast chain-id --rpc-url http://127.0.0.1:8545)"
@@ -69,11 +66,8 @@ if [ "$eth_chain_id" != "$actual_eth_chain_id" ] || [ "$eth_genesis" != "$actual
   exit 1
 fi
 
-actual_usdt_chain_id="$(usdt_cast chain-id --rpc-url http://127.0.0.1:8545)"
-actual_usdt_genesis="$(usdt_cast block 0 --rpc-url http://127.0.0.1:8545 --json | jq -r '.hash')"
-
-if [ "$usdt_chain_id" != "$actual_usdt_chain_id" ] || [ "$usdt_genesis" != "$actual_usdt_genesis" ]; then
-  echo "stale USDT artifact fingerprint detected. run: make chain-down-usdt && make chain-up-usdt" >&2
+if [ -z "$usdt_contract" ] || [ "$usdt_contract" = "null" ]; then
+  echo "missing usdt_contract_address in ETH artifact. run make chain-up-eth first" >&2
   exit 1
 fi
 
@@ -84,9 +78,9 @@ if [ -z "$usdt_payer_address" ]; then
   usdt_payer_address="$ANVIL_DEFAULT_ADDRESS"
 fi
 
-usdt_code="$(usdt_cast code --rpc-url http://127.0.0.1:8545 "$usdt_contract")"
+usdt_code="$(eth_cast code --rpc-url http://127.0.0.1:8545 "$usdt_contract")"
 if [ "$usdt_code" = "0x" ] || [ "$usdt_code" = "0x0" ]; then
-  echo "USDT contract code missing on current chain. run: make chain-down-usdt && make chain-up-usdt" >&2
+  echo "USDT contract code missing on current chain. run make chain-up-eth (or chain-down-eth && chain-up-eth)" >&2
   exit 1
 fi
 
@@ -97,13 +91,13 @@ eth_tx="$(
 eth_balance_after="$(eth_cast balance --rpc-url http://127.0.0.1:8545 "$eth_recipient_address")"
 
 usdt_balance_before="$(
-  usdt_cast call --rpc-url http://127.0.0.1:8545 "$usdt_contract" "balanceOf(address)(uint256)" "$usdt_recipient_address"
+  eth_cast call --rpc-url http://127.0.0.1:8545 "$usdt_contract" "balanceOf(address)(uint256)" "$usdt_recipient_address"
 )"
 usdt_tx="$(
-  usdt_cast send --rpc-url http://127.0.0.1:8545 --private-key "$usdt_private_key" "$usdt_contract" "transfer(address,uint256)" "$usdt_recipient_address" "$usdt_transfer_amount" --json | jq -r '.transactionHash'
+  eth_cast send --rpc-url http://127.0.0.1:8545 --private-key "$usdt_private_key" "$usdt_contract" "transfer(address,uint256)" "$usdt_recipient_address" "$usdt_transfer_amount" --json | jq -r '.transactionHash'
 )"
 usdt_balance_after="$(
-  usdt_cast call --rpc-url http://127.0.0.1:8545 "$usdt_contract" "balanceOf(address)(uint256)" "$usdt_recipient_address"
+  eth_cast call --rpc-url http://127.0.0.1:8545 "$usdt_contract" "balanceOf(address)(uint256)" "$usdt_recipient_address"
 )"
 
 jq -n \
@@ -116,8 +110,6 @@ jq -n \
   --arg eth_tx "$eth_tx" \
   --arg eth_balance_before "$eth_balance_before" \
   --arg eth_balance_after "$eth_balance_after" \
-  --arg usdt_chain_id "$actual_usdt_chain_id" \
-  --arg usdt_genesis_block_hash "$actual_usdt_genesis" \
   --arg usdt_rpc_url "$usdt_rpc_url" \
   --arg usdt_payer_address "$usdt_payer_address" \
   --arg usdt_contract "$usdt_contract" \
@@ -142,8 +134,8 @@ jq -n \
         recipient_balance_after: $eth_balance_after
       },
       usdt_transfer: {
-        chain_id: ($usdt_chain_id | tonumber),
-        genesis_block_hash: $usdt_genesis_block_hash,
+        chain_id: ($eth_chain_id | tonumber),
+        genesis_block_hash: $eth_genesis_block_hash,
         rpc_url: $usdt_rpc_url,
         payer: $usdt_payer_address,
         contract: $usdt_contract,

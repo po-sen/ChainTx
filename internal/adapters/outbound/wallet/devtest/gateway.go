@@ -157,7 +157,7 @@ func (g *Gateway) deriveEVM(
 		)
 	}
 
-	if network != "sepolia" && network != "mainnet" {
+	if network != "sepolia" && network != "local" && network != "mainnet" {
 		return portsout.DerivedAddress{}, apperrors.NewValidation(
 			"unsupported_allocator_target",
 			"unsupported ethereum network for devtest allocator",
@@ -178,9 +178,9 @@ func (g *Gateway) deriveEVM(
 		return portsout.DerivedAddress{}, mapKeyError(keyErr)
 	}
 
-	chainID := int64(11155111)
-	if network == "mainnet" {
-		chainID = 1
+	chainID, appErr := g.resolveEVMChainID(network, input.ChainID)
+	if appErr != nil {
+		return portsout.DerivedAddress{}, appErr
 	}
 
 	return portsout.DerivedAddress{
@@ -188,6 +188,34 @@ func (g *Gateway) deriveEVM(
 		AddressScheme: input.AddressScheme,
 		ChainID:       &chainID,
 	}, nil
+}
+
+func (g *Gateway) resolveEVMChainID(network string, inputChainID *int64) (int64, *apperrors.AppError) {
+	if network == "mainnet" {
+		return 1, nil
+	}
+
+	if inputChainID != nil {
+		if *inputChainID <= 0 {
+			return 0, apperrors.NewInternal(
+				"invalid_configuration",
+				"wallet allocation requires positive chain_id for non-mainnet ethereum network",
+				map[string]any{
+					"network":  network,
+					"chain_id": *inputChainID,
+				},
+			)
+		}
+		return *inputChainID, nil
+	}
+
+	return 0, apperrors.NewInternal(
+		"invalid_configuration",
+		"wallet allocation requires chain_id for non-mainnet ethereum network",
+		map[string]any{
+			"network": network,
+		},
+	)
 }
 
 func mapKeyError(keyErr *walletkeys.KeyError) *apperrors.AppError {

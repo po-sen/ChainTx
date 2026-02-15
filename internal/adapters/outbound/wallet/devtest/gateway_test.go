@@ -106,6 +106,7 @@ func TestGatewayDeriveAddressEVMSepolia(t *testing.T) {
 		},
 	}, nil)
 
+	chainID := int64(11155111)
 	result, appErr := gateway.DeriveAddress(context.Background(), portsout.DeriveAddressInput{
 		Chain:                  "ethereum",
 		Network:                "sepolia",
@@ -113,6 +114,7 @@ func TestGatewayDeriveAddressEVMSepolia(t *testing.T) {
 		KeysetID:               "ks_eth_sepolia",
 		DerivationPathTemplate: "0/{index}",
 		DerivationIndex:        7,
+		ChainID:                &chainID,
 	})
 	if appErr != nil {
 		t.Fatalf("expected derive success, got %+v", appErr)
@@ -122,5 +124,79 @@ func TestGatewayDeriveAddressEVMSepolia(t *testing.T) {
 	}
 	if result.ChainID == nil || *result.ChainID != 11155111 {
 		t.Fatalf("expected sepolia chain id 11155111, got %+v", result.ChainID)
+	}
+}
+
+func TestGatewayDeriveAddressEVMUsesInputChainID(t *testing.T) {
+	gateway := NewGateway(Config{
+		AllowMainnet: false,
+		Keysets: map[string]string{
+			"ks_eth_local": testXPub,
+		},
+	}, nil)
+
+	chainID := int64(31337)
+	result, appErr := gateway.DeriveAddress(context.Background(), portsout.DeriveAddressInput{
+		Chain:                  "ethereum",
+		Network:                "local",
+		AddressScheme:          "evm_bip44",
+		KeysetID:               "ks_eth_local",
+		DerivationPathTemplate: "0/{index}",
+		DerivationIndex:        7,
+		ChainID:                &chainID,
+	})
+	if appErr != nil {
+		t.Fatalf("expected derive success, got %+v", appErr)
+	}
+	if result.ChainID == nil || *result.ChainID != chainID {
+		t.Fatalf("expected local chain id %d, got %+v", chainID, result.ChainID)
+	}
+}
+
+func TestGatewayDeriveAddressEVMLocalRequiresChainID(t *testing.T) {
+	gateway := NewGateway(Config{
+		AllowMainnet: false,
+		Keysets: map[string]string{
+			"ks_eth_local": testXPub,
+		},
+	}, nil)
+
+	_, appErr := gateway.DeriveAddress(context.Background(), portsout.DeriveAddressInput{
+		Chain:                  "ethereum",
+		Network:                "local",
+		AddressScheme:          "evm_bip44",
+		KeysetID:               "ks_eth_local",
+		DerivationPathTemplate: "0/{index}",
+		DerivationIndex:        7,
+	})
+	if appErr == nil {
+		t.Fatalf("expected missing chain id error")
+	}
+	if appErr.Code != "invalid_configuration" {
+		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
+	}
+}
+
+func TestGatewayDeriveAddressEVMSepoliaRequiresChainID(t *testing.T) {
+	gateway := NewGateway(Config{
+		AllowMainnet: false,
+		Keysets: map[string]string{
+			"ks_eth_sepolia": testXPub,
+		},
+	}, nil)
+
+	_, appErr := gateway.DeriveAddress(context.Background(), portsout.DeriveAddressInput{
+		Chain:                  "ethereum",
+		Network:                "sepolia",
+		AddressScheme:          "evm_bip44",
+		KeysetID:               "ks_eth_sepolia",
+		DerivationPathTemplate: "0/{index}",
+		DerivationIndex:        7,
+	})
+	if appErr == nil {
+		t.Fatalf("expected missing chain id error")
+	}
+	if appErr.Code != "invalid_configuration" {
+		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
 	}
 }

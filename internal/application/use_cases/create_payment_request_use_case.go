@@ -77,6 +77,7 @@ func (u *createPaymentRequestUseCase) resolvePaymentAddress(
 		KeysetID:               input.KeysetID,
 		DerivationPathTemplate: input.DerivationPathTemplate,
 		DerivationIndex:        input.DerivationIndex,
+		ChainID:                input.ChainID,
 	})
 	if appErr != nil {
 		return dto.ResolvePaymentAddressOutput{}, appErr

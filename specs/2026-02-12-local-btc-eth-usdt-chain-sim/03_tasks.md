@@ -65,13 +65,13 @@ links:
      - [ ] Expected result: RPC is healthy and `eth_chainId` equals `0x7a69` (`31337`).
      - [ ] Logs/metrics to check (if applicable): ETH logs confirm startup and artifact export completion.
 
-4. T-004 - Implement dedicated USDT deploy/mint stack
+4. T-004 - Implement USDT deploy/mint utility on ETH local chain
 
-   - Scope: Add independent single-container USDT rail (`usdt-node`) that runs embedded EVM, preflight-checks USDT-local RPC/chain id, enforces deterministic reuse policy by chain fingerprint, deploys ERC20 (`decimals=6`) only when needed, mints test balance, and writes artifact.
-   - Output: `usdt.json` with contract metadata and mint evidence.
+   - Scope: Add dedicated USDT deploy utility (`usdt-deployer`) inside ETH compose that targets `eth-node` RPC, preflight-checks chain id, enforces deterministic reuse policy by chain fingerprint, deploys ERC20 (`decimals=6`) only when needed, mints test balance, and updates `eth.json` with USDT metadata.
+   - Output: `eth.json` includes USDT contract metadata and mint evidence.
    - Linked requirements: FR-001, FR-007, FR-010, NFR-001, NFR-004, NFR-005
    - Validation:
-     - [ ] How to verify (manual steps or command): `make chain-up-usdt` without requiring ETH stack.
+     - [ ] How to verify (manual steps or command): `make chain-up-eth`.
      - [ ] Expected result: Deploy/mint succeeds on chain `31337`; mismatch chain id path fails fast with clear error.
      - [ ] Logs/metrics to check (if applicable): deployment tx hash, contract address, token decimals, and minted amount logged.
 
@@ -82,7 +82,7 @@ links:
    - Linked requirements: FR-002, FR-003, FR-006, FR-007, NFR-002, NFR-006
    - Validation:
      - [ ] How to verify (manual steps or command): run `make local-up`, `make local-down`, then `make local-up-all`, `make local-down`.
-     - [ ] Expected result: Default profile starts only service+BTC; full profile starts all rails; startup/shutdown order is deterministic.
+     - [ ] Expected result: Default profile starts only service+BTC; full profile starts BTC+ETH and executes USDT deploy step; startup/shutdown order is deterministic.
      - [ ] Logs/metrics to check (if applicable): command output shows ordered steps and preflight results.
 
 6. T-006 - Implement cleanup workflow and state reset policy
@@ -145,10 +145,8 @@ links:
 
 - `docker compose -f deployments/local-chains/docker-compose.btc.yml config` (pass)
 - `docker compose -f deployments/local-chains/docker-compose.eth.yml config` (pass)
-- `docker compose -f deployments/local-chains/docker-compose.usdt.yml config` (pass)
 - `docker compose -f deployments/service/docker-compose.yml config` (pass)
-- `make chain-up-eth` (pass; `eth.json` exported with `chain_id=31337`)
-- `make chain-up-usdt` (pass; `usdt.json` exported with deployed contract)
+- `make chain-up-eth` (pass; `eth.json` exported on chain `31337` with embedded USDT metadata)
 - `make chain-up-btc` (pass; `btc.json` exported with descriptor/xpub)
 - `make service-up` (pass)
 - `go test ./...` (pass)
