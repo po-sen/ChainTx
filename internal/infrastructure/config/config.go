@@ -18,12 +18,26 @@ const (
 	defaultMigrationsPath           = "internal/adapters/outbound/persistence/postgresql/migrations"
 	defaultAllocationMode           = "devtest"
 	defaultKeysetHashAlgo           = "hmac-sha256"
+	defaultReconcilerPollInterval   = 15 * time.Second
+	defaultReconcilerBatchSize      = 100
+	defaultReconcilerLeaseDuration  = 30 * time.Second
+	defaultDetectedThresholdBPS     = 10000
+	defaultConfirmedThresholdBPS    = 10000
 )
 
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
 const devtestKeysetsEnv = "PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON"
 const keysetHashHMACSecretEnv = "PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET"
 const keysetHashHMACPreviousSecretsEnv = "PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON"
+const reconcilerEnabledEnv = "PAYMENT_REQUEST_RECONCILER_ENABLED"
+const reconcilerPollIntervalEnv = "PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS"
+const reconcilerBatchSizeEnv = "PAYMENT_REQUEST_RECONCILER_BATCH_SIZE"
+const reconcilerLeaseSecondsEnv = "PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS"
+const reconcilerWorkerIDEnv = "PAYMENT_REQUEST_RECONCILER_WORKER_ID"
+const reconcilerDetectedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS"
+const reconcilerConfirmedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS"
+const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
+const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
 
 type ConfigError struct {
 	Code     string
@@ -55,6 +69,15 @@ type Config struct {
 	KeysetHashAlgorithm      string
 	KeysetHashHMACSecret     string
 	KeysetHashHMACLegacyKeys []string
+	ReconcilerEnabled        bool
+	ReconcilerPollInterval   time.Duration
+	ReconcilerBatchSize      int
+	ReconcilerLeaseDuration  time.Duration
+	ReconcilerWorkerID       string
+	ReconcilerDetectedBPS    int
+	ReconcilerConfirmedBPS   int
+	BTCExploraBaseURL        string
+	EVMRPCURLs               map[string]string
 	AddressSchemeAllowList   map[string]map[string]struct{}
 }
 
@@ -124,6 +147,25 @@ func LoadConfig() (Config, *ConfigError) {
 	if legacySecretErr != nil {
 		return Config{}, legacySecretErr
 	}
+	reconcilerEnabled, reconcilerPollInterval, reconcilerBatchSize, reconcilerLeaseDuration, reconcilerDetectedBPS, reconcilerConfirmedBPS, reconcilerErr := parseReconcilerConfig()
+	if reconcilerErr != nil {
+		return Config{}, reconcilerErr
+	}
+	reconcilerWorkerID := strings.TrimSpace(os.Getenv(reconcilerWorkerIDEnv))
+	if reconcilerWorkerID == "" {
+		reconcilerWorkerID = defaultReconcilerWorkerID()
+	}
+	btcExploraBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv(btcExploraBaseURLEnv)), "/")
+	evmRPCURLs, evmRPCURLsErr := parseEVMRPCURLs(strings.TrimSpace(os.Getenv(evmRPCURLsEnv)))
+	if evmRPCURLsErr != nil {
+		return Config{}, evmRPCURLsErr
+	}
+	if reconcilerEnabled && btcExploraBaseURL == "" && len(evmRPCURLs) == 0 {
+		return Config{}, &ConfigError{
+			Code:    "CONFIG_RECONCILER_ENDPOINTS_REQUIRED",
+			Message: "at least one observer endpoint is required when reconciler is enabled",
+		}
+	}
 
 	addressSchemeAllowList, allowListErr := loadAddressSchemeAllowList()
 	if allowListErr != nil {
@@ -146,6 +188,15 @@ func LoadConfig() (Config, *ConfigError) {
 		KeysetHashAlgorithm:      defaultKeysetHashAlgo,
 		KeysetHashHMACSecret:     keysetHashHMACSecret,
 		KeysetHashHMACLegacyKeys: keysetHashLegacyKeys,
+		ReconcilerEnabled:        reconcilerEnabled,
+		ReconcilerPollInterval:   reconcilerPollInterval,
+		ReconcilerBatchSize:      reconcilerBatchSize,
+		ReconcilerLeaseDuration:  reconcilerLeaseDuration,
+		ReconcilerWorkerID:       reconcilerWorkerID,
+		ReconcilerDetectedBPS:    reconcilerDetectedBPS,
+		ReconcilerConfirmedBPS:   reconcilerConfirmedBPS,
+		BTCExploraBaseURL:        btcExploraBaseURL,
+		EVMRPCURLs:               evmRPCURLs,
 		AddressSchemeAllowList:   addressSchemeAllowList,
 	}, nil
 }
@@ -454,6 +505,139 @@ func parseLegacyHMACSecrets(raw string) ([]string, *ConfigError) {
 		}
 		seen[trimmed] = struct{}{}
 		out = append(out, trimmed)
+	}
+
+	return out, nil
+}
+
+func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int, *ConfigError) {
+	enabled := false
+	rawEnabled := strings.TrimSpace(os.Getenv(reconcilerEnabledEnv))
+	if rawEnabled != "" {
+		parsed, err := strconv.ParseBool(rawEnabled)
+		if err != nil {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_ENABLED_INVALID",
+				Message: reconcilerEnabledEnv + " must be a boolean",
+			}
+		}
+		enabled = parsed
+	}
+
+	pollInterval := defaultReconcilerPollInterval
+	rawPollInterval := strings.TrimSpace(os.Getenv(reconcilerPollIntervalEnv))
+	if rawPollInterval != "" {
+		seconds, err := strconv.Atoi(rawPollInterval)
+		if err != nil || seconds <= 0 {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_POLL_INTERVAL_INVALID",
+				Message: reconcilerPollIntervalEnv + " must be a positive integer in seconds",
+			}
+		}
+		pollInterval = time.Duration(seconds) * time.Second
+	}
+
+	batchSize := defaultReconcilerBatchSize
+	rawBatchSize := strings.TrimSpace(os.Getenv(reconcilerBatchSizeEnv))
+	if rawBatchSize != "" {
+		parsed, err := strconv.Atoi(rawBatchSize)
+		if err != nil || parsed <= 0 {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_BATCH_SIZE_INVALID",
+				Message: reconcilerBatchSizeEnv + " must be a positive integer",
+			}
+		}
+		batchSize = parsed
+	}
+
+	leaseDuration := defaultReconcilerLeaseDuration
+	rawLeaseSeconds := strings.TrimSpace(os.Getenv(reconcilerLeaseSecondsEnv))
+	if rawLeaseSeconds != "" {
+		seconds, err := strconv.Atoi(rawLeaseSeconds)
+		if err != nil || seconds <= 0 {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_LEASE_SECONDS_INVALID",
+				Message: reconcilerLeaseSecondsEnv + " must be a positive integer in seconds",
+			}
+		}
+		leaseDuration = time.Duration(seconds) * time.Second
+	}
+
+	detectedBPS := defaultDetectedThresholdBPS
+	rawDetectedBPS := strings.TrimSpace(os.Getenv(reconcilerDetectedThresholdBPSEnv))
+	if rawDetectedBPS != "" {
+		parsed, err := strconv.Atoi(rawDetectedBPS)
+		if err != nil {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_DETECTED_THRESHOLD_BPS_INVALID",
+				Message: reconcilerDetectedThresholdBPSEnv + " must be an integer",
+			}
+		}
+		detectedBPS = parsed
+	}
+
+	confirmedBPS := defaultConfirmedThresholdBPS
+	rawConfirmedBPS := strings.TrimSpace(os.Getenv(reconcilerConfirmedThresholdBPSEnv))
+	if rawConfirmedBPS != "" {
+		parsed, err := strconv.Atoi(rawConfirmedBPS)
+		if err != nil {
+			return false, 0, 0, 0, 0, 0, &ConfigError{
+				Code:    "CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID",
+				Message: reconcilerConfirmedThresholdBPSEnv + " must be an integer",
+			}
+		}
+		confirmedBPS = parsed
+	}
+
+	if confirmedBPS < 1 || confirmedBPS > 10000 {
+		return false, 0, 0, 0, 0, 0, &ConfigError{
+			Code:    "CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID",
+			Message: reconcilerConfirmedThresholdBPSEnv + " must be between 1 and 10000",
+		}
+	}
+	if detectedBPS < 1 || detectedBPS > confirmedBPS {
+		return false, 0, 0, 0, 0, 0, &ConfigError{
+			Code:    "CONFIG_RECONCILER_DETECTED_THRESHOLD_BPS_INVALID",
+			Message: reconcilerDetectedThresholdBPSEnv + " must be between 1 and " + strconv.Itoa(confirmedBPS),
+		}
+	}
+
+	return enabled, pollInterval, batchSize, leaseDuration, detectedBPS, confirmedBPS, nil
+}
+
+func defaultReconcilerWorkerID() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	return hostname + ":" + strconv.Itoa(os.Getpid())
+}
+
+func parseEVMRPCURLs(raw string) (map[string]string, *ConfigError) {
+	if raw == "" {
+		return map[string]string{}, nil
+	}
+
+	decoded := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, &ConfigError{
+			Code:    "CONFIG_EVM_RPC_URLS_INVALID",
+			Message: evmRPCURLsEnv + " must be a JSON object",
+		}
+	}
+
+	out := map[string]string{}
+	for network, rpcURL := range decoded {
+		normalizedNetwork := strings.ToLower(strings.TrimSpace(network))
+		normalizedRPCURL := strings.TrimSpace(rpcURL)
+		if normalizedNetwork == "" || normalizedRPCURL == "" {
+			continue
+		}
+		out[normalizedNetwork] = normalizedRPCURL
 	}
 
 	return out, nil

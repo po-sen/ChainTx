@@ -9,6 +9,7 @@ import (
 
 	"chaintx/internal/adapters/inbound/http/controllers"
 	httpRouter "chaintx/internal/adapters/inbound/http/router"
+	chainobserverdevtest "chaintx/internal/adapters/outbound/chainobserver/devtest"
 	"chaintx/internal/adapters/outbound/docs"
 	postgresqlassetcatalog "chaintx/internal/adapters/outbound/persistence/postgresql/assetcatalog"
 	postgresqlbootstrap "chaintx/internal/adapters/outbound/persistence/postgresql/bootstrap"
@@ -21,12 +22,14 @@ import (
 	"chaintx/internal/application/use_cases"
 	"chaintx/internal/infrastructure/config"
 	"chaintx/internal/infrastructure/httpserver"
+	"chaintx/internal/infrastructure/reconciler"
 )
 
 type Container struct {
 	Database                     *sql.DB
 	Server                       *httpserver.Server
 	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
+	ReconcilerWorker             *reconciler.Worker
 }
 
 type WalletGatewayBuilder func(cfg config.Config, logger *log.Logger) portsout.WalletAllocationGateway
@@ -87,6 +90,12 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 	assetCatalogReadModel := postgresqlassetcatalog.NewReadModel(databasePool)
 	paymentRequestRepository := postgresqlpaymentrequest.NewRepository(databasePool, logger)
 	paymentRequestReadModel := postgresqlpaymentrequest.NewReadModel(databasePool)
+	chainObserverGateway := chainobserverdevtest.NewGateway(chainobserverdevtest.Config{
+		BTCExploraBaseURL: cfg.BTCExploraBaseURL,
+		EVMRPCURLs:        cfg.EVMRPCURLs,
+		DetectedBPS:       cfg.ReconcilerDetectedBPS,
+		ConfirmedBPS:      cfg.ReconcilerConfirmedBPS,
+	})
 
 	listAssetsUseCase := use_cases.NewListAssetsUseCase(assetCatalogReadModel)
 	createPaymentRequestUseCase := use_cases.NewCreatePaymentRequestUseCase(
@@ -96,6 +105,19 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 		use_cases.NewSystemClock(),
 	)
 	getPaymentRequestUseCase := use_cases.NewGetPaymentRequestUseCase(paymentRequestReadModel)
+	reconcilePaymentRequestsUseCase := use_cases.NewReconcilePaymentRequestsUseCase(
+		paymentRequestRepository,
+		chainObserverGateway,
+	)
+	reconcilerWorker := reconciler.NewWorker(
+		cfg.ReconcilerEnabled,
+		cfg.ReconcilerPollInterval,
+		cfg.ReconcilerBatchSize,
+		cfg.ReconcilerWorkerID,
+		cfg.ReconcilerLeaseDuration,
+		reconcilePaymentRequestsUseCase,
+		logger,
+	)
 
 	healthController := controllers.NewHealthController(healthUseCase, logger)
 	swaggerController := controllers.NewSwaggerController(openAPIUseCase, logger)
@@ -119,6 +141,7 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 		Database:                     databasePool,
 		Server:                       server,
 		InitializePersistenceUseCase: initializePersistenceUseCase,
+		ReconcilerWorker:             reconcilerWorker,
 	}, nil
 }
 

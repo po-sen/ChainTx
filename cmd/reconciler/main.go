@@ -19,11 +19,10 @@ func main() {
 		logger.Printf("startup config error code=%s message=%s metadata=%v", cfgErr.Code, cfgErr.Message, cfgErr.Metadata)
 		os.Exit(1)
 	}
-	logger.Printf(
-		"wallet allocation config mode=%s devtest_allow_mainnet=%t",
-		cfg.AllocationMode,
-		cfg.DevtestAllowMainnet,
-	)
+	if !cfg.ReconcilerEnabled {
+		logger.Printf("reconciler config error code=CONFIG_RECONCILER_DISABLED message=PAYMENT_REQUEST_RECONCILER_ENABLED must be true for reconciler runtime")
+		os.Exit(1)
+	}
 
 	container, buildErr := di.Build(cfg, logger)
 	if buildErr != nil {
@@ -42,51 +41,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger.Printf("persistence initialization starting database_target=%s", cfg.DatabaseTarget)
+	logger.Printf("reconciler persistence initialization starting database_target=%s", cfg.DatabaseTarget)
 	persistenceErr := container.InitializePersistenceUseCase.Execute(ctx, dto.InitializePersistenceCommand{
 		ReadinessTimeout:       cfg.DBReadinessTimeout,
 		ReadinessRetryInterval: cfg.DBReadinessRetryInterval,
 	})
 	if persistenceErr != nil {
 		logger.Printf(
-			"persistence initialization failed code=%s message=%s metadata=%v",
+			"reconciler persistence initialization failed code=%s message=%s metadata=%v",
 			persistenceErr.Code,
 			persistenceErr.Message,
 			persistenceErr.Details,
 		)
 		os.Exit(1)
 	}
-	logger.Printf("persistence initialization completed database_target=%s", cfg.DatabaseTarget)
+	logger.Printf("reconciler persistence initialization completed database_target=%s", cfg.DatabaseTarget)
 
-	if container.ReconcilerWorker != nil && container.ReconcilerWorker.Enabled() {
-		go container.ReconcilerWorker.Start(ctx)
+	if container.ReconcilerWorker == nil || !container.ReconcilerWorker.Enabled() {
+		logger.Printf("reconciler startup failed code=RECONCILER_WORKER_NOT_ENABLED message=reconciler worker is not enabled")
+		os.Exit(1)
 	}
 
-	serverErrCh := make(chan error, 1)
-	go func() {
-		serverErrCh <- container.Server.Start()
-	}()
-
-	select {
-	case err := <-serverErrCh:
-		if err != nil {
-			logger.Printf("server startup failed: %v", err)
-			os.Exit(1)
-		}
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-		defer cancel()
-
-		if err := container.Server.Shutdown(shutdownCtx); err != nil {
-			logger.Printf("graceful shutdown failed: %v", err)
-			os.Exit(1)
-		}
-
-		if err := <-serverErrCh; err != nil {
-			logger.Printf("server stopped with error: %v", err)
-			os.Exit(1)
-		}
-
-		logger.Printf("server stopped")
-	}
+	container.ReconcilerWorker.Start(ctx)
+	logger.Printf("reconciler stopped")
 }

@@ -36,6 +36,15 @@ make service-up
 make service-down
 ```
 
+若要啟用「獨立 reconciler container」並水平擴展：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_RECONCILER_REPLICAS=3 \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
+
 ## Local Chain Simulation (new workflow)
 
 此模式提供獨立 rail stacks，遵守以下固定常數：
@@ -86,6 +95,8 @@ make local-up
 - upsert `asset_catalog(ethereum/local/USDT)`（`token_contract`/`token_decimals` 來自 `eth.json` 的 USDT 欄位）
 
 `ethereum/sepolia` rows 仍保留，不會被 local sync 覆蓋。
+
+此外，服務有選配的 chain reconciler（預設關閉）。目前建議部署模式是獨立 `reconciler` service（不是跟 `app` 同 process），開啟後會定期輪詢 open payment requests，將狀態從 `pending` 推進到 `detected` / `confirmed`，以及在到期後更新成 `expired`。
 
 全量 profile（需要 ETH + USDT 測試時）：
 
@@ -195,6 +206,15 @@ make chain-down-all
 | `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported) |
 | `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                           |
 | `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No           | `[]`               | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                           |
+| `PAYMENT_REQUEST_RECONCILER_ENABLED`                     | No           | `false`            | Enable background chain reconciler worker                                                                                                                        |
+| `PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS`       | No           | `15`               | Reconciler polling interval in seconds                                                                                                                           |
+| `PAYMENT_REQUEST_RECONCILER_BATCH_SIZE`                  | No           | `100`              | Max open payment requests processed per cycle                                                                                                                    |
+| `PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS`               | No           | `30`               | Lease duration for claimed open requests (used for multi-replica work partition and crash recovery)                                                              |
+| `PAYMENT_REQUEST_RECONCILER_WORKER_ID`                   | No           | hostname+pid       | Optional worker identity override; default is generated from runtime host/process                                                                                |
+| `PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS`      | No           | `10000`            | Detected threshold in bps (1-10000), must be `<= PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`                                                             |
+| `PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`     | No           | `10000`            | Confirmed threshold in bps (1-10000)                                                                                                                             |
+| `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No           | empty              | BTC Esplora-compatible API base URL (must support `/address/{address}` with `chain_stats`/`mempool_stats`)                                                       |
+| `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No           | `{}`               | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                    |
 | `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                         |
 | `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                |
 
@@ -240,6 +260,36 @@ PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON='["old-secret-1","old-sec
 ```
 
 這樣同一組 key material 在 secret 輪替期間仍可匹配舊 hash，不會被誤判為新 keyset 而強制 `rotated`。
+
+若要開啟 chain reconciler（獨立 service，local profile 常用設定）：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_RECONCILER_REPLICAS=2 \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
+
+若你希望「部分付款先進 `detected`」，可把 detected 門檻設低於 confirmed（例：80%/100%）：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_RECONCILER_REPLICAS=2 \
+  SERVICE_RECONCILER_DETECTED_THRESHOLD_BPS=8000 \
+  SERVICE_RECONCILER_CONFIRMED_THRESHOLD_BPS=10000 \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
+
+若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_RECONCILER_REPLICAS=2 \
+  SERVICE_BTC_ESPLORA_BASE_URL='https://your-esplora.example/api' \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
 
 可用以下命令驗證「給定 xpub/tpub 與 index=0 預期地址是否一致」：
 
