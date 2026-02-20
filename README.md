@@ -67,6 +67,7 @@ make local-up
 
 - `service` stack（app + postgres）
 - `btc` stack（含 payer/receiver descriptor bootstrap）
+- `btc-explorer`（BTC 區塊瀏覽器）
 
 `local-up`/`local-up-all` 在啟動 `service` 時，會優先讀取 artifacts 並注入：
 
@@ -92,6 +93,7 @@ make local-up-all
 會額外啟動：
 
 - `eth` stack（anvil, chain id 31337）
+- `eth-explorer`（EVM 區塊瀏覽器）
 - `usdt` deploy step（`chain-up-eth` 內建一次性 `usdt-deployer`，把 USDT 合約部署到同一條 `eth-node` 鏈上）
 
 停止 profile：
@@ -100,12 +102,48 @@ make local-up-all
 make local-down
 ```
 
+### Explorer Deployment Rules
+
+可用不同 Make target 決定是否部署 explorer：
+
+- `make chain-up-btc`：用 `COMPOSE_PROFILES=btc-explorer` 啟動 BTC node + BTC explorer
+- `make chain-up-btc-no-explorer`：只啟動 BTC node
+- `make chain-up-eth`：用 `COMPOSE_PROFILES=eth-explorer` 啟動 ETH node + Blockscout（db/redis/backend/frontend）
+- `make chain-up-eth-no-explorer`：只啟動 ETH node（仍會執行 USDT deploy）
+- `make chain-up-all`：BTC/ETH 都含 explorer
+- `make chain-up-all-no-explorer`：BTC/ETH 都不含 explorer
+- `make local-up` / `make local-up-all`：含 explorer
+- `make local-up-no-explorer` / `make local-up-all-no-explorer`：不含 explorer
+
+如果你直接使用 `docker compose`，也可以用 profiles：
+
+- BTC explorer profile: `btc-explorer`（也支援 `explorer`）
+- ETH explorer profile: `eth-explorer`（也支援 `explorer`）
+- USDT deployer profile: `usdt-deployer`（one-shot；Makefile 會用 `run --rm usdt-deployer` 觸發）
+
+範例：
+
+```bash
+# BTC: 只起 node
+docker compose -f deployments/local-chains/docker-compose.btc.yml up -d btc-node
+
+# BTC: 起 node + explorer
+docker compose -f deployments/local-chains/docker-compose.btc.yml --profile btc-explorer up -d
+
+# ETH: 只起 anvil node
+docker compose -f deployments/local-chains/docker-compose.eth.yml up -d eth-node
+
+# ETH: 起 anvil + blockscout stack
+docker compose -f deployments/local-chains/docker-compose.eth.yml --profile eth-explorer up -d
+```
+
 ### Per-rail Commands
 
 BTC:
 
 ```bash
 make chain-up-btc
+make chain-up-btc-no-explorer
 make chain-down-btc
 ```
 
@@ -113,6 +151,7 @@ ETH:
 
 ```bash
 make chain-up-eth
+make chain-up-eth-no-explorer
 make chain-down-eth
 ```
 
@@ -127,8 +166,20 @@ Aggregate:
 
 ```bash
 make chain-up-all
+make chain-up-all-no-explorer
 make chain-down-all
 ```
+
+### Local Explorer URLs
+
+- BTC explorer: `http://127.0.0.1:${BTC_EXPLORER_PORT:-3002}`
+- ETH explorer (Blockscout): `http://127.0.0.1:${ETH_EXPLORER_PORT:-5100}`
+
+可覆寫的埠位與 RPC 參數：
+
+- `BTC_EXPLORER_PORT`（預設 `3002`）
+- `ETH_EXPLORER_PORT`（預設 `5100`，Blockscout frontend）
+- `ETH_EXPLORER_API_PORT`（預設 `5101`，Blockscout backend API）
 
 ## Configuration
 

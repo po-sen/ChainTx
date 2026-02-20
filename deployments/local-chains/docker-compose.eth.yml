@@ -15,6 +15,8 @@ services:
       - test test test test test test test test test test test junk
       - --block-time
       - "1"
+      - --allow-origin
+      - "*"
     ports:
       - "${ETH_RPC_PORT:-8545}:8545"
     healthcheck:
@@ -28,8 +30,109 @@ services:
       retries: 20
     restart: unless-stopped
 
+  eth-explorer-db:
+    image: postgres:16-alpine
+    profiles:
+      - explorer
+      - eth-explorer
+    environment:
+      POSTGRES_DB: blockscout
+      POSTGRES_USER: blockscout
+      POSTGRES_PASSWORD: blockscout
+    volumes:
+      - eth-explorer-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U blockscout -d blockscout >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  eth-explorer-redis:
+    image: redis:7-alpine
+    profiles:
+      - explorer
+      - eth-explorer
+    restart: unless-stopped
+
+  eth-explorer:
+    image: ghcr.io/blockscout/blockscout:latest
+    profiles:
+      - explorer
+      - eth-explorer
+    command: sh -c "bin/blockscout eval \"Elixir.Explorer.ReleaseTasks.create_and_migrate()\" && bin/blockscout start"
+    environment:
+      ETHEREUM_JSONRPC_VARIANT: anvil
+      ETHEREUM_JSONRPC_TRANSPORT: http
+      ETHEREUM_JSONRPC_HTTP_URL: http://eth-node:8545/
+      ETHEREUM_JSONRPC_TRACE_URL: http://eth-node:8545/
+      ETHEREUM_JSONRPC_WS_URL: ws://eth-node:8545/
+      DATABASE_URL: postgresql://blockscout:blockscout@eth-explorer-db:5432/blockscout?ssl=false
+      ECTO_USE_SSL: "false"
+      SECRET_KEY_BASE: 56NtB48ear7+wMSf0IQuWDAAazhpb31qyc7GiyspBP2vh7t5zlCsF5QDv76chXeN
+      PORT: "4000"
+      CHAIN_ID: "31337"
+      COIN: ETH
+      COIN_NAME: Ethereum
+      DISABLE_MARKET: "true"
+      DISABLE_WEBAPP: "false"
+      DISABLE_FILE_LOGGING: "true"
+      ACCOUNT_ENABLED: "false"
+      ACCOUNT_REDIS_URL: redis://eth-explorer-redis:6379
+      MICROSERVICE_VISUALIZE_SOL2UML_ENABLED: "false"
+      MICROSERVICE_SIG_PROVIDER_ENABLED: "false"
+      MICROSERVICE_ACCOUNT_ABSTRACTION_ENABLED: "false"
+      INDEXER_DISABLE_INTERNAL_TRANSACTIONS_FETCHER: "true"
+      INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: "true"
+    ports:
+      - "${ETH_EXPLORER_API_PORT:-5101}:4000"
+    depends_on:
+      eth-node:
+        condition: service_healthy
+      eth-explorer-db:
+        condition: service_healthy
+      eth-explorer-redis:
+        condition: service_started
+    restart: unless-stopped
+
+  eth-explorer-frontend:
+    image: ghcr.io/blockscout/frontend:latest
+    profiles:
+      - explorer
+      - eth-explorer
+    environment:
+      NEXT_PUBLIC_API_HOST: ${ETH_EXPLORER_API_HOST:-127.0.0.1:5101}
+      NEXT_PUBLIC_API_PROTOCOL: http
+      NEXT_PUBLIC_STATS_API_HOST: ${ETH_EXPLORER_STATS_API_HOST:-http://127.0.0.1:5101}
+      NEXT_PUBLIC_NETWORK_NAME: ChainTx Local
+      NEXT_PUBLIC_NETWORK_SHORT_NAME: ChainTx Local
+      NEXT_PUBLIC_NETWORK_ID: "31337"
+      NEXT_PUBLIC_NETWORK_CURRENCY_NAME: Ether
+      NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: ETH
+      NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: "18"
+      NEXT_PUBLIC_API_BASE_PATH: /
+      NEXT_PUBLIC_APP_HOST: ${ETH_EXPLORER_APP_HOST:-127.0.0.1:5100}
+      NEXT_PUBLIC_APP_PROTOCOL: http
+      NEXT_PUBLIC_HOMEPAGE_CHARTS: "['daily_txs']"
+      NEXT_PUBLIC_VISUALIZE_API_HOST: ${ETH_EXPLORER_VISUALIZE_API_HOST:-http://127.0.0.1:5101}
+      NEXT_PUBLIC_IS_TESTNET: "true"
+      NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: ws
+      NEXT_PUBLIC_API_SPEC_URL: https://raw.githubusercontent.com/blockscout/blockscout-api-v2-swagger/main/swagger.yaml
+    ports:
+      - "${ETH_EXPLORER_PORT:-5100}:3000"
+    depends_on:
+      eth-explorer:
+        condition: service_started
+    restart: unless-stopped
+
   usdt-deployer:
     image: ghcr.io/foundry-rs/foundry:v1.4.0
+    profiles:
+      - usdt-deployer
     working_dir: /workspace
     entrypoint:
       - /bin/sh
@@ -49,3 +152,6 @@ services:
         condition: service_healthy
     volumes:
       - ../..:/workspace
+
+volumes:
+  eth-explorer-db-data:

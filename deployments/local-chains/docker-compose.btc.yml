@@ -26,5 +26,26 @@ services:
       retries: 20
     restart: unless-stopped
 
+  btc-explorer:
+    build:
+      context: ../..
+      dockerfile: build/local-chains/btc-explorer.Dockerfile
+    profiles:
+      - explorer
+      - btc-explorer
+    environment:
+      BTCEXP_HOST: 0.0.0.0
+      BTCEXP_PORT: 3002
+      BTCEXP_BITCOIND_HOST: btc-node
+      BTCEXP_BITCOIND_PORT: 18443
+      BTCEXP_BITCOIND_USER: ${BTC_RPC_USER:-chaintx}
+      BTCEXP_BITCOIND_PASS: ${BTC_RPC_PASSWORD:-chaintx}
+    ports:
+      - "${BTC_EXPLORER_PORT:-3002}:3002"
+    depends_on:
+      btc-node:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   btc-data:

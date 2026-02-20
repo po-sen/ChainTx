@@ -16,6 +16,7 @@ BTC_ARTIFACT := $(ARTIFACT_DIR)/btc.json
 ETH_ARTIFACT := $(ARTIFACT_DIR)/eth.json
 SMOKE_LOCAL_ARTIFACT := $(ARTIFACT_DIR)/smoke-local.json
 SMOKE_ALL_ARTIFACT := $(ARTIFACT_DIR)/smoke-local-all.json
+SERVICE_RECEIVE_PROOF_ARTIFACT := $(ARTIFACT_DIR)/service-receive-local-all.json
 
 BTC_RPC_USER ?= chaintx
 BTC_RPC_PASSWORD ?= chaintx
@@ -30,13 +31,19 @@ SERVICE_KS_ETH_LOCAL ?= $(SERVICE_KS_ETH_SEPOLIA)
 SERVICE_DC := $(DOCKER_COMPOSE) -f $(SERVICE_COMPOSE) --project-name $(SERVICE_PROJECT)
 BTC_DC := $(DOCKER_COMPOSE) -f $(BTC_COMPOSE) --project-name $(BTC_PROJECT)
 ETH_DC := $(DOCKER_COMPOSE) -f $(ETH_COMPOSE) --project-name $(ETH_PROJECT)
+BTC_DC_WITH_EXPLORER := COMPOSE_PROFILES=btc-explorer $(BTC_DC)
+ETH_DC_WITH_EXPLORER := COMPOSE_PROFILES=eth-explorer $(ETH_DC)
+BTC_BOOTSTRAP_CMD := LOCAL_CHAIN_ARTIFACT_DIR="$(ARTIFACT_DIR)" LOCAL_BTC_PROJECT="$(BTC_PROJECT)" BTC_COMPOSE_FILE="$(BTC_COMPOSE)" BTC_RPC_USER="$(BTC_RPC_USER)" BTC_RPC_PASSWORD="$(BTC_RPC_PASSWORD)" BTC_RPC_URL="$(BTC_RPC_URL)" $(SCRIPT_DIR)/btc_bootstrap.sh
+ETH_EXPORT_CMD := LOCAL_CHAIN_ARTIFACT_DIR="$(ARTIFACT_DIR)" LOCAL_ETH_PROJECT="$(ETH_PROJECT)" ETH_COMPOSE_FILE="$(ETH_COMPOSE)" ETH_RPC_URL="$(ETH_RPC_URL)" ETH_EXPECTED_CHAIN_ID="31337" SERVICE_KS_ETH_SEPOLIA="$(SERVICE_KS_ETH_SEPOLIA)" $(SCRIPT_DIR)/eth_export_artifacts.sh
+ETH_USDT_DEPLOY_CMD := ETH_RPC_URL="http://eth-node:8545" ETH_EXPECTED_CHAIN_ID="31337" $(ETH_DC) run --rm usdt-deployer
 
 .PHONY: \
 	service-up service-down \
-	chain-up-btc chain-down-btc \
-	chain-up-eth chain-down-eth \
-	chain-up-all chain-down-all \
-	local-up local-up-all local-down
+	chain-up-btc chain-up-btc-no-explorer chain-down-btc \
+	chain-up-eth chain-up-eth-no-explorer chain-down-eth \
+	chain-up-all chain-up-all-no-explorer chain-down-all \
+	local-up local-up-no-explorer local-up-all local-up-all-no-explorer local-down \
+	local-receive-test local-receive-proof
 
 service-up:
 	@set -eu; \
@@ -47,29 +54,46 @@ service-up:
 service-down:
 	$(SERVICE_DC) stop app postgres
 
-chain-up-btc:
-	$(BTC_DC) up -d btc-node
-	LOCAL_CHAIN_ARTIFACT_DIR="$(ARTIFACT_DIR)" LOCAL_BTC_PROJECT="$(BTC_PROJECT)" BTC_COMPOSE_FILE="$(BTC_COMPOSE)" BTC_RPC_USER="$(BTC_RPC_USER)" BTC_RPC_PASSWORD="$(BTC_RPC_PASSWORD)" BTC_RPC_URL="$(BTC_RPC_URL)" $(SCRIPT_DIR)/btc_bootstrap.sh
+chain-up-btc: BTC_UP_CMD = $(BTC_DC_WITH_EXPLORER) up -d
+chain-up-btc-no-explorer: BTC_UP_CMD = $(BTC_DC) up -d
+
+chain-up-btc chain-up-btc-no-explorer:
+	$(BTC_UP_CMD)
+	$(BTC_BOOTSTRAP_CMD)
 
 chain-down-btc:
-	$(BTC_DC) stop btc-node
+	$(BTC_DC) stop btc-explorer btc-node
 	rm -f $(BTC_ARTIFACT) $(SMOKE_LOCAL_ARTIFACT) $(SMOKE_ALL_ARTIFACT)
 
-chain-up-eth:
-	$(ETH_DC) up -d eth-node
-	LOCAL_CHAIN_ARTIFACT_DIR="$(ARTIFACT_DIR)" LOCAL_ETH_PROJECT="$(ETH_PROJECT)" ETH_COMPOSE_FILE="$(ETH_COMPOSE)" ETH_RPC_URL="$(ETH_RPC_URL)" ETH_EXPECTED_CHAIN_ID="31337" SERVICE_KS_ETH_SEPOLIA="$(SERVICE_KS_ETH_SEPOLIA)" $(SCRIPT_DIR)/eth_export_artifacts.sh
-	ETH_RPC_URL="http://eth-node:8545" ETH_EXPECTED_CHAIN_ID="31337" $(ETH_DC) run --rm usdt-deployer
+chain-up-eth: ETH_UP_CMD = $(ETH_DC_WITH_EXPLORER) up -d
+chain-up-eth-no-explorer: ETH_UP_CMD = $(ETH_DC) up -d
+
+chain-up-eth chain-up-eth-no-explorer:
+	$(ETH_UP_CMD)
+	$(ETH_EXPORT_CMD)
+	$(ETH_USDT_DEPLOY_CMD)
 
 chain-down-eth:
-	$(ETH_DC) stop eth-node
+	$(ETH_DC) stop eth-explorer-frontend eth-explorer eth-explorer-redis eth-explorer-db eth-node
 	rm -f $(ETH_ARTIFACT) $(ARTIFACT_DIR)/usdt.json $(SMOKE_ALL_ARTIFACT)
 
 chain-up-all: chain-up-btc chain-up-eth
+
+chain-up-all-no-explorer: chain-up-btc-no-explorer chain-up-eth-no-explorer
 
 chain-down-all: chain-down-eth chain-down-btc
 
 local-up: chain-up-btc service-up
 
+local-up-no-explorer: chain-up-btc-no-explorer service-up
+
 local-up-all: chain-up-all service-up
 
+local-up-all-no-explorer: chain-up-all-no-explorer service-up
+
 local-down: service-down chain-down-all
+
+local-receive-test:
+	LOCAL_CHAIN_ARTIFACT_DIR="$(ARTIFACT_DIR)" LOCAL_BTC_PROJECT="$(BTC_PROJECT)" LOCAL_ETH_PROJECT="$(ETH_PROJECT)" LOCAL_SERVICE_PROJECT="$(SERVICE_PROJECT)" BTC_COMPOSE_FILE="$(BTC_COMPOSE)" ETH_COMPOSE_FILE="$(ETH_COMPOSE)" SERVICE_COMPOSE_FILE="$(SERVICE_COMPOSE)" BTC_RPC_USER="$(BTC_RPC_USER)" BTC_RPC_PASSWORD="$(BTC_RPC_PASSWORD)" ETH_RPC_URL="$(ETH_RPC_URL)" ETH_EXPECTED_CHAIN_ID="31337" SERVICE_RECEIVE_PROOF_FILE="$(SERVICE_RECEIVE_PROOF_ARTIFACT)" $(SCRIPT_DIR)/smoke_service_receive_all.sh
+
+local-receive-proof: local-up-all local-receive-test
