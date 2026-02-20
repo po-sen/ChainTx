@@ -89,5 +89,9 @@ func (u *initializePersistenceUseCase) Execute(ctx context.Context, command dto.
 		return migrationErr
 	}
 
+	if syncErr := u.gateway.SyncWalletAllocationState(ctx); syncErr != nil {
+		return syncErr
+	}
+
 	return u.gateway.ValidateAssetCatalogIntegrity(ctx)
 }

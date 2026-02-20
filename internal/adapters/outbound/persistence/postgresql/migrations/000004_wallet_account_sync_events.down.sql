@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_wallet_account_sync_events_target_created;
+DROP INDEX IF EXISTS idx_wallet_account_sync_events_wallet_created;
+DROP TABLE IF EXISTS app.wallet_account_sync_events;

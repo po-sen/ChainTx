@@ -33,6 +33,7 @@ SEPOLIA_SYNC_SOURCE_REF="${SEPOLIA_SYNC_SOURCE_REF:-seed-default:service_sync_ca
 KEYSET_HASH_ALGO="hmac-sha256"
 DEVTEST_KEYSETS_JSON="${PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON:-}"
 KEYSET_HASH_HMAC_SECRET="${PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET:-}"
+KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON="${PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON:-}"
 
 svc_dc() {
   dc "$SERVICE_COMPOSE_FILE" "$LOCAL_SERVICE_PROJECT" "$@"
@@ -153,6 +154,10 @@ require_keyset_hash_config() {
     echo "missing PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET for wallet-account hash sync" >&2
     exit 1
   fi
+  if [ -n "$KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON" ] && ! printf '%s' "$KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "invalid PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON: must be a JSON array" >&2
+    exit 1
+  fi
 }
 
 resolve_keyset_material() {
@@ -192,15 +197,37 @@ resolve_keyset_material() {
   printf '%s' "$key_material"
 }
 
-compute_key_material_hash() {
+compute_key_material_hash_for_secret() {
   local key_material="$1"
+  local secret="$2"
   local digest
-  digest="$(printf '%s' "$key_material" | openssl dgst -sha256 -hmac "$KEYSET_HASH_HMAC_SECRET" -r | awk '{print $1}')"
+  digest="$(printf '%s' "$key_material" | openssl dgst -sha256 -hmac "$secret" -r | awk '{print $1}')"
   if ! printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'; then
     echo "failed to compute valid hmac-sha256 digest" >&2
     exit 1
   fi
   printf '%s' "$digest"
+}
+
+build_key_hash_candidates() {
+  local key_material="$1"
+  local active_hash
+  active_hash="$(compute_key_material_hash_for_secret "$key_material" "$KEYSET_HASH_HMAC_SECRET")"
+  printf 'active|%s\n' "$active_hash"
+
+  if [ -z "$KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON" ]; then
+    return 0
+  fi
+
+  while IFS= read -r legacy_secret; do
+    [ -n "$legacy_secret" ] || continue
+    local legacy_hash
+    legacy_hash="$(compute_key_material_hash_for_secret "$key_material" "$legacy_secret")"
+    if [ "$legacy_hash" = "$active_hash" ]; then
+      continue
+    fi
+    printf 'legacy|%s\n' "$legacy_hash"
+  done < <(printf '%s' "$KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON" | jq -r '.[] | strings | select(length > 0)')
 }
 
 generate_wallet_account_id() {
@@ -217,9 +244,14 @@ ensure_wallet_account_for_keyset() {
   local network="$2"
   local keyset_id="$3"
 
-  local key_material key_hash
+  local key_material key_hash candidate_hashes
   key_material="$(resolve_keyset_material "$chain" "$network" "$keyset_id")"
-  key_hash="$(compute_key_material_hash "$key_material")"
+  candidate_hashes="$(build_key_hash_candidates "$key_material")"
+  key_hash="$(printf '%s\n' "$candidate_hashes" | head -n1 | awk -F'|' '{print $2}')"
+  if [ -z "$key_hash" ]; then
+    echo "failed to build key hash candidates for chain=$chain network=$network keyset_id=$keyset_id" >&2
+    exit 1
+  fi
   local key_hash_sql
   key_hash_sql="$(sql_escape "$key_hash")"
 
@@ -247,7 +279,28 @@ LIMIT 1;
     active_hash="${active_row#*|}"
   fi
 
-  if [ -n "$active_id" ] && { [ "$active_hash" = "$key_hash" ] || [ -z "$active_hash" ]; }; then
+  local active_match_source
+  active_match_source=""
+  if [ -n "$active_id" ]; then
+    if [ -z "$active_hash" ]; then
+      active_match_source="unhashed"
+    elif [ "$active_hash" = "$key_hash" ]; then
+      active_match_source="active"
+    else
+      while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        local source hash
+        source="${candidate%%|*}"
+        hash="${candidate#*|}"
+        if [ "$source" = "legacy" ] && [ "$active_hash" = "$hash" ]; then
+          active_match_source="legacy"
+          break
+        fi
+      done <<< "$candidate_hashes"
+    fi
+  fi
+
+  if [ -n "$active_id" ] && [ -n "$active_match_source" ]; then
     local active_id_sql
     active_id_sql="$(sql_escape "$active_id")"
 
@@ -262,23 +315,39 @@ SET
 WHERE id = '$active_id_sql';
 "
 
-    echo "wallet-account sync action=reused chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$active_id hash_prefix=${key_hash:0:12}" >&2
+    echo "wallet-account sync action=reused chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$active_id hash_prefix=${key_hash:0:12} match_source=$active_match_source" >&2
     printf '%s' "$active_id"
     return 0
   fi
 
-  local historical_id
-  historical_id="$(pg_scalar "
+  local historical_id historical_match_source
+  historical_id=""
+  historical_match_source=""
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    local source hash
+    source="${candidate%%|*}"
+    hash="${candidate#*|}"
+    [ -n "$hash" ] || continue
+
+    local hash_sql
+    hash_sql="$(sql_escape "$hash")"
+    historical_id="$(pg_scalar "
 SELECT id
 FROM app.wallet_accounts
 WHERE chain = '$chain_sql'
   AND network = '$network_sql'
   AND keyset_id = '$keyset_sql'
   AND is_active = FALSE
-  AND key_material_hash = '$key_hash_sql'
+  AND key_material_hash = '$hash_sql'
 ORDER BY updated_at DESC, created_at DESC
 LIMIT 1;
 ")"
+    if [ -n "$historical_id" ]; then
+      historical_match_source="$source"
+      break
+    fi
+  done <<< "$candidate_hashes"
 
   if [ -n "$historical_id" ]; then
     local historical_id_sql
@@ -306,7 +375,7 @@ WHERE id = '$historical_id_sql';
 COMMIT;
 "
 
-    echo "wallet-account sync action=reactivated chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$historical_id hash_prefix=${key_hash:0:12}" >&2
+    echo "wallet-account sync action=reactivated chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$historical_id hash_prefix=${key_hash:0:12} match_source=${historical_match_source:-active}" >&2
     printf '%s' "$historical_id"
     return 0
   fi
@@ -357,7 +426,7 @@ VALUES (
 COMMIT;
 "
 
-  echo "wallet-account sync action=rotated chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$new_wallet_account_id hash_prefix=${key_hash:0:12}" >&2
+  echo "wallet-account sync action=rotated chain=$chain network=$network keyset_id=$keyset_id wallet_account_id=$new_wallet_account_id hash_prefix=${key_hash:0:12} match_source=active" >&2
   printf '%s' "$new_wallet_account_id"
 }
 

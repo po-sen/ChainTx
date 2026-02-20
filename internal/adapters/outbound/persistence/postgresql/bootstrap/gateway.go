@@ -27,7 +27,11 @@ type ValidationRules struct {
 	AllocationMode         string
 	DevtestAllowMainnet    bool
 	DevtestKeysets         map[string]string
+	DevtestKeysetPreflight []DevtestKeysetPreflightEntry
 	DevtestKeyNormalizers  map[string]DevtestKeyNormalizer
+	KeysetHashAlgorithm    string
+	KeysetHashHMACSecret   string
+	KeysetHashHMACLegacy   []string
 	AddressSchemeAllowList map[string]map[string]struct{}
 	ModeStartupValidators  map[string]AllocationModeStartupValidator
 	ModeCatalogValidators  map[string]AllocationModeCatalogRowValidator
@@ -36,6 +40,14 @@ type ValidationRules struct {
 type DevtestKeyNormalizer func(raw string) (walletkeys.ExtendedPublicKey, string, *walletkeys.KeyError)
 type AllocationModeStartupValidator func(g *Gateway) *apperrors.AppError
 type AllocationModeCatalogRowValidator func(g *Gateway, row catalogValidationRow, details map[string]any) *apperrors.AppError
+
+type DevtestKeysetPreflightEntry struct {
+	Chain                 string
+	Network               string
+	KeysetID              string
+	ExtendedPublicKey     string
+	ExpectedIndex0Address string
+}
 
 type Gateway struct {
 	databaseURL     string
@@ -62,7 +74,11 @@ func NewGateway(
 			AllocationMode:         strings.ToLower(strings.TrimSpace(validationRules.AllocationMode)),
 			DevtestAllowMainnet:    validationRules.DevtestAllowMainnet,
 			DevtestKeysets:         copyStringMap(validationRules.DevtestKeysets),
+			DevtestKeysetPreflight: copyPreflightEntries(validationRules.DevtestKeysetPreflight),
 			DevtestKeyNormalizers:  mergeDevtestKeyNormalizers(validationRules.DevtestKeyNormalizers),
+			KeysetHashAlgorithm:    strings.ToLower(strings.TrimSpace(validationRules.KeysetHashAlgorithm)),
+			KeysetHashHMACSecret:   strings.TrimSpace(validationRules.KeysetHashHMACSecret),
+			KeysetHashHMACLegacy:   copyStringList(validationRules.KeysetHashHMACLegacy),
 			AddressSchemeAllowList: copyAllowList(validationRules.AddressSchemeAllowList),
 			ModeStartupValidators:  mergeModeStartupValidators(validationRules.ModeStartupValidators),
 			ModeCatalogValidators:  mergeModeCatalogValidators(validationRules.ModeCatalogValidators),
@@ -157,6 +173,27 @@ func (g *Gateway) RunMigrations(ctx context.Context) *apperrors.AppError {
 	}
 
 	return nil
+}
+
+func (g *Gateway) SyncWalletAllocationState(ctx context.Context) *apperrors.AppError {
+	mode := strings.ToLower(strings.TrimSpace(g.validationRules.AllocationMode))
+
+	switch mode {
+	case "devtest":
+		return g.syncDevtestWalletAllocationState(ctx)
+	case "prod":
+		return apperrors.NewInternal(
+			"wallet_allocation_not_implemented",
+			"production wallet allocation mode is not implemented",
+			nil,
+		)
+	default:
+		return apperrors.NewInternal(
+			"invalid_configuration",
+			"allocation mode is invalid",
+			map[string]any{"allocation_mode": g.validationRules.AllocationMode},
+		)
+	}
 }
 
 func (g *Gateway) ValidateAssetCatalogIntegrity(ctx context.Context) *apperrors.AppError {
@@ -527,6 +564,51 @@ func copyStringMap(input map[string]string) map[string]string {
 	out := make(map[string]string, len(input))
 	for key, value := range input {
 		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func copyStringList(input []string) []string {
+	if len(input) == 0 {
+		return []string{}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(input))
+	for _, value := range input {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func copyPreflightEntries(input []DevtestKeysetPreflightEntry) []DevtestKeysetPreflightEntry {
+	if len(input) == 0 {
+		return []DevtestKeysetPreflightEntry{}
+	}
+	out := make([]DevtestKeysetPreflightEntry, 0, len(input))
+	for _, entry := range input {
+		chain := strings.ToLower(strings.TrimSpace(entry.Chain))
+		network := strings.ToLower(strings.TrimSpace(entry.Network))
+		keysetID := strings.TrimSpace(entry.KeysetID)
+		key := strings.TrimSpace(entry.ExtendedPublicKey)
+		expected := strings.TrimSpace(entry.ExpectedIndex0Address)
+		if chain == "" || network == "" || keysetID == "" || key == "" || expected == "" {
+			continue
+		}
+		out = append(out, DevtestKeysetPreflightEntry{
+			Chain:                 chain,
+			Network:               network,
+			KeysetID:              keysetID,
+			ExtendedPublicKey:     key,
+			ExpectedIndex0Address: expected,
+		})
 	}
 	return out
 }

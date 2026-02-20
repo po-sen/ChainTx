@@ -3,6 +3,7 @@
 package bootstrap
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -141,6 +142,71 @@ func TestValidateCatalogRowRejectsTokenMetadataInvariant(t *testing.T) {
 	}
 	if appErr.Code != "invalid_configuration" {
 		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
+	}
+}
+
+func TestSyncWalletAllocationStateRequiresPreflightEntries(t *testing.T) {
+	gateway := NewGateway(
+		"",
+		"",
+		"",
+		ValidationRules{
+			AllocationMode:       "devtest",
+			DevtestKeysets:       map[string]string{"ks_btc_testnet": testTPub},
+			KeysetHashAlgorithm:  "hmac-sha256",
+			KeysetHashHMACSecret: "active-secret",
+		},
+		nil,
+	)
+
+	appErr := gateway.SyncWalletAllocationState(context.Background())
+	if appErr == nil {
+		t.Fatalf("expected error")
+	}
+	if appErr.Code != "invalid_configuration" {
+		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
+	}
+}
+
+func TestVerifyIndexZeroPreflightMismatch(t *testing.T) {
+	gateway := newValidationTestGateway(map[string]string{
+		"ks_btc_testnet": testTPub,
+	}, false)
+
+	appErr := gateway.verifyIndexZeroPreflight(
+		catalogSyncTarget{
+			Chain:    "bitcoin",
+			Network:  "testnet",
+			KeysetID: "ks_btc_testnet",
+		},
+		testTPub,
+		"tb1q00000000000000000000000000000000000000",
+	)
+	if appErr == nil {
+		t.Fatalf("expected mismatch error")
+	}
+	if appErr.Code != "invalid_configuration" {
+		t.Fatalf("expected invalid_configuration, got %s", appErr.Code)
+	}
+}
+
+func TestClassifyHashMatch(t *testing.T) {
+	active := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	legacy := map[string]struct{}{
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {},
+	}
+
+	if source, matched := classifyHashMatch("", active, legacy); !matched || source != matchSourceUnhashed {
+		t.Fatalf("expected unhashed match, got matched=%t source=%s", matched, source)
+	}
+	if source, matched := classifyHashMatch(active, active, legacy); !matched || source != matchSourceActive {
+		t.Fatalf("expected active match, got matched=%t source=%s", matched, source)
+	}
+	if source, matched := classifyHashMatch("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", active, legacy); !matched || source != matchSourceLegacy {
+		t.Fatalf("expected legacy match, got matched=%t source=%s", matched, source)
+	}
+	if source, matched := classifyHashMatch("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", active, legacy); matched || source != "" {
+		t.Fatalf("expected no match, got matched=%t source=%s", matched, source)
 	}
 }
 

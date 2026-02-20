@@ -32,6 +32,10 @@ func TestInitializePersistenceUseCaseExecuteSuccess(t *testing.T) {
 		t.Fatalf("expected one migration run, got %d", fakeGateway.migrationRuns)
 	}
 
+	if fakeGateway.syncRuns != 1 {
+		t.Fatalf("expected one sync run, got %d", fakeGateway.syncRuns)
+	}
+
 	if fakeGateway.validationRuns != 1 {
 		t.Fatalf("expected one validation run, got %d", fakeGateway.validationRuns)
 	}
@@ -114,6 +118,30 @@ func TestInitializePersistenceUseCaseExecuteMigrationFailure(t *testing.T) {
 	}
 }
 
+func TestInitializePersistenceUseCaseExecuteSyncFailure(t *testing.T) {
+	fakeGateway := &fakePersistenceGateway{
+		syncErr: apperrors.NewInternal("WALLET_SYNC_FAILED", "failed", nil),
+	}
+	useCase := NewInitializePersistenceUseCase(fakeGateway)
+
+	appErr := useCase.Execute(context.Background(), dto.InitializePersistenceCommand{
+		ReadinessTimeout:       50 * time.Millisecond,
+		ReadinessRetryInterval: 5 * time.Millisecond,
+	})
+
+	if appErr == nil {
+		t.Fatalf("expected sync error")
+	}
+
+	if appErr.Code != "WALLET_SYNC_FAILED" {
+		t.Fatalf("expected WALLET_SYNC_FAILED, got %s", appErr.Code)
+	}
+
+	if fakeGateway.validationRuns != 0 {
+		t.Fatalf("expected validation not to run on sync failure, got %d", fakeGateway.validationRuns)
+	}
+}
+
 func TestInitializePersistenceUseCaseExecuteValidationFailure(t *testing.T) {
 	fakeGateway := &fakePersistenceGateway{
 		validateCatalogErr: apperrors.NewInternal("ASSET_CATALOG_INVALID", "failed", nil),
@@ -151,9 +179,11 @@ func TestInitializePersistenceUseCaseExecuteInvalidCommand(t *testing.T) {
 type fakePersistenceGateway struct {
 	readinessErrors    []*apperrors.AppError
 	runMigrationErr    *apperrors.AppError
+	syncErr            *apperrors.AppError
 	validateCatalogErr *apperrors.AppError
 	readinessChecks    int
 	migrationRuns      int
+	syncRuns           int
 	validationRuns     int
 }
 
@@ -175,6 +205,11 @@ func (f *fakePersistenceGateway) CheckReadiness(_ context.Context) *apperrors.Ap
 func (f *fakePersistenceGateway) RunMigrations(_ context.Context) *apperrors.AppError {
 	f.migrationRuns++
 	return f.runMigrationErr
+}
+
+func (f *fakePersistenceGateway) SyncWalletAllocationState(_ context.Context) *apperrors.AppError {
+	f.syncRuns++
+	return f.syncErr
 }
 
 func (f *fakePersistenceGateway) ValidateAssetCatalogIntegrity(_ context.Context) *apperrors.AppError {

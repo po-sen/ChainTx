@@ -73,6 +73,10 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 			AllocationMode:         cfg.AllocationMode,
 			DevtestAllowMainnet:    cfg.DevtestAllowMainnet,
 			DevtestKeysets:         cfg.DevtestKeysets,
+			DevtestKeysetPreflight: mapPreflightEntries(cfg.DevtestKeysetPreflights),
+			KeysetHashAlgorithm:    cfg.KeysetHashAlgorithm,
+			KeysetHashHMACSecret:   cfg.KeysetHashHMACSecret,
+			KeysetHashHMACLegacy:   cfg.KeysetHashHMACLegacyKeys,
 			AddressSchemeAllowList: cfg.AddressSchemeAllowList,
 		},
 		logger,
@@ -116,6 +120,24 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 		Server:                       server,
 		InitializePersistenceUseCase: initializePersistenceUseCase,
 	}, nil
+}
+
+func mapPreflightEntries(entries []config.DevtestKeysetPreflightEntry) []postgresqlbootstrap.DevtestKeysetPreflightEntry {
+	if len(entries) == 0 {
+		return []postgresqlbootstrap.DevtestKeysetPreflightEntry{}
+	}
+
+	out := make([]postgresqlbootstrap.DevtestKeysetPreflightEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, postgresqlbootstrap.DevtestKeysetPreflightEntry{
+			Chain:                 entry.Chain,
+			Network:               entry.Network,
+			KeysetID:              entry.KeysetID,
+			ExtendedPublicKey:     entry.ExtendedPublicKey,
+			ExpectedIndex0Address: entry.ExpectedIndex0Address,
+		})
+	}
+	return out
 }
 
 func buildWalletGateway(cfg config.Config, logger *log.Logger) (portsout.WalletAllocationGateway, error) {

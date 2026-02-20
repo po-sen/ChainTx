@@ -139,13 +139,15 @@ func TestLoadConfigSupportsDevtestKeysetsNestedFormat(t *testing.T) {
   "bitcoin": {
     "regtest": {
       "keyset_id": "ks_btc_regtest",
-      "extended_public_key": "tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"
+      "extended_public_key": "tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5",
+      "expected_index0_address": "tb1qdummy"
     }
   },
   "ethereum": {
     "local": {
       "keyset_id": "ks_eth_local",
-      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj"
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0xdummy"
     }
   }
 }`)
@@ -161,6 +163,9 @@ func TestLoadConfigSupportsDevtestKeysetsNestedFormat(t *testing.T) {
 	if cfg.DevtestKeysets["ks_eth_local"] == "" {
 		t.Fatalf("expected nested-format keyset ks_eth_local to be parsed")
 	}
+	if len(cfg.DevtestKeysetPreflights) != 2 {
+		t.Fatalf("expected 2 preflight entries, got %d", len(cfg.DevtestKeysetPreflights))
+	}
 }
 
 func TestLoadConfigRejectsNestedFormatWithoutKeysetID(t *testing.T) {
@@ -169,6 +174,7 @@ func TestLoadConfigRejectsNestedFormatWithoutKeysetID(t *testing.T) {
   "ethereum": {
     "local": {
       "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj"
+      ,"expected_index0_address":"0xdummy"
     }
   }
 }`)
@@ -195,5 +201,75 @@ func TestLoadConfigRequiresKeysetHashSecretInDevtestMode(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_KEYSET_HASH_HMAC_SECRET_REQUIRED" {
 		t.Fatalf("expected CONFIG_KEYSET_HASH_HMAC_SECRET_REQUIRED, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsNestedFormatWithoutExpectedAddress(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "bitcoin": {
+    "testnet": {
+      "keyset_id": "ks_btc_testnet",
+      "extended_public_key": "tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "devtest-hmac-secret")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_DEVTEST_KEYSETS_INVALID" {
+		t.Fatalf("expected CONFIG_DEVTEST_KEYSETS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigParsesLegacyHMACSecrets(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "sepolia": {
+      "keyset_id": "ks_eth_sepolia",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON", `["legacy-a", "legacy-b", "legacy-a", " "]`)
+
+	cfg, cfgErr := LoadConfig()
+	if cfgErr != nil {
+		t.Fatalf("expected no error, got %v", cfgErr)
+	}
+	if len(cfg.KeysetHashHMACLegacyKeys) != 2 {
+		t.Fatalf("expected 2 legacy secrets, got %d", len(cfg.KeysetHashHMACLegacyKeys))
+	}
+	if cfg.KeysetHashHMACLegacyKeys[0] != "legacy-a" || cfg.KeysetHashHMACLegacyKeys[1] != "legacy-b" {
+		t.Fatalf("unexpected legacy secrets: %+v", cfg.KeysetHashHMACLegacyKeys)
+	}
+}
+
+func TestLoadConfigRejectsInvalidLegacyHMACSecrets(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "sepolia": {
+      "keyset_id": "ks_eth_sepolia",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON", `{bad-json`)
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_INVALID" {
+		t.Fatalf("expected CONFIG_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_INVALID, got %s", cfgErr.Code)
 	}
 }

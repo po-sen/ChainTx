@@ -23,6 +23,7 @@ const (
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
 const devtestKeysetsEnv = "PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON"
 const keysetHashHMACSecretEnv = "PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET"
+const keysetHashHMACPreviousSecretsEnv = "PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON"
 
 type ConfigError struct {
 	Code     string
@@ -50,8 +51,10 @@ type Config struct {
 	AllocationMode           string
 	DevtestAllowMainnet      bool
 	DevtestKeysets           map[string]string
+	DevtestKeysetPreflights  []DevtestKeysetPreflightEntry
 	KeysetHashAlgorithm      string
 	KeysetHashHMACSecret     string
+	KeysetHashHMACLegacyKeys []string
 	AddressSchemeAllowList   map[string]map[string]struct{}
 }
 
@@ -98,7 +101,7 @@ func LoadConfig() (Config, *ConfigError) {
 	}
 
 	rawDevtestKeysets := strings.TrimSpace(os.Getenv(devtestKeysetsEnv))
-	devtestKeysets, keysetErr := parseDevtestKeysets(rawDevtestKeysets)
+	devtestKeysets, devtestKeysetPreflights, keysetErr := parseDevtestKeysets(rawDevtestKeysets)
 	if keysetErr != nil {
 		return Config{}, keysetErr
 	}
@@ -114,6 +117,12 @@ func LoadConfig() (Config, *ConfigError) {
 			Code:    "CONFIG_KEYSET_HASH_HMAC_SECRET_REQUIRED",
 			Message: keysetHashHMACSecretEnv + " is required for devtest allocation mode",
 		}
+	}
+	keysetHashLegacyKeys, legacySecretErr := parseLegacyHMACSecrets(
+		strings.TrimSpace(os.Getenv(keysetHashHMACPreviousSecretsEnv)),
+	)
+	if legacySecretErr != nil {
+		return Config{}, legacySecretErr
 	}
 
 	addressSchemeAllowList, allowListErr := loadAddressSchemeAllowList()
@@ -133,8 +142,10 @@ func LoadConfig() (Config, *ConfigError) {
 		AllocationMode:           allocationMode,
 		DevtestAllowMainnet:      allowMainnet,
 		DevtestKeysets:           devtestKeysets,
+		DevtestKeysetPreflights:  devtestKeysetPreflights,
 		KeysetHashAlgorithm:      defaultKeysetHashAlgo,
 		KeysetHashHMACSecret:     keysetHashHMACSecret,
+		KeysetHashHMACLegacyKeys: keysetHashLegacyKeys,
 		AddressSchemeAllowList:   addressSchemeAllowList,
 	}, nil
 }
@@ -245,25 +256,34 @@ type devtestScopedKeysetEnvelope struct {
 	ExtendedPublicKey string `json:"extended_public_key"`
 	KeyMaterial       string `json:"key_material"`
 	XPub              string `json:"xpub"`
+	ExpectedAddress   string `json:"expected_index0_address"`
 }
 
-func parseDevtestKeysets(raw string) (map[string]string, *ConfigError) {
+type DevtestKeysetPreflightEntry struct {
+	Chain                 string
+	Network               string
+	KeysetID              string
+	ExtendedPublicKey     string
+	ExpectedIndex0Address string
+}
+
+func parseDevtestKeysets(raw string) (map[string]string, []DevtestKeysetPreflightEntry, *ConfigError) {
 	if raw == "" {
-		return map[string]string{}, nil
+		return map[string]string{}, []DevtestKeysetPreflightEntry{}, nil
 	}
 
 	entries := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return nil, &ConfigError{
+		return nil, nil, &ConfigError{
 			Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 			Message: devtestKeysetsEnv + " must be a JSON object",
 		}
 	}
 
 	if parsedFlat, isFlat, cfgErr := parseFlatDevtestKeysets(entries); cfgErr != nil {
-		return nil, cfgErr
+		return nil, nil, cfgErr
 	} else if isFlat {
-		return parsedFlat, nil
+		return parsedFlat, []DevtestKeysetPreflightEntry{}, nil
 	}
 
 	return parseNestedDevtestKeysets(entries)
@@ -310,8 +330,9 @@ func parseFlatDevtestKeysets(entries map[string]json.RawMessage) (map[string]str
 	return keysets, true, nil
 }
 
-func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]string, *ConfigError) {
+func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]string, []DevtestKeysetPreflightEntry, *ConfigError) {
 	keysets := map[string]string{}
+	preflights := []DevtestKeysetPreflightEntry{}
 
 	for chain, chainPayload := range entries {
 		normalizedChain := strings.ToLower(strings.TrimSpace(chain))
@@ -321,7 +342,7 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 
 		networkEntries := map[string]json.RawMessage{}
 		if err := json.Unmarshal(chainPayload, &networkEntries); err != nil {
-			return nil, &ConfigError{
+			return nil, nil, &ConfigError{
 				Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 				Message: devtestKeysetsEnv + " nested format must be chain->network objects",
 				Metadata: map[string]string{
@@ -338,7 +359,7 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 
 			envelope := devtestScopedKeysetEnvelope{}
 			if err := json.Unmarshal(networkPayload, &envelope); err != nil {
-				return nil, &ConfigError{
+				return nil, nil, &ConfigError{
 					Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 					Message: devtestKeysetsEnv + " nested entries must be objects with keyset_id and extended_public_key",
 					Metadata: map[string]string{
@@ -350,7 +371,7 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 
 			keysetID := strings.TrimSpace(envelope.KeysetID)
 			if keysetID == "" {
-				return nil, &ConfigError{
+				return nil, nil, &ConfigError{
 					Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 					Message: devtestKeysetsEnv + " nested entry is missing keyset_id",
 					Metadata: map[string]string{
@@ -362,7 +383,7 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 
 			keyMaterial := resolveEnvelopeKeyMaterial(envelope.ExtendedPublicKey, envelope.KeyMaterial, envelope.XPub)
 			if keyMaterial == "" {
-				return nil, &ConfigError{
+				return nil, nil, &ConfigError{
 					Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 					Message: devtestKeysetsEnv + " nested entry is missing extended_public_key",
 					Metadata: map[string]string{
@@ -372,9 +393,21 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 					},
 				}
 			}
+			expectedAddress := strings.TrimSpace(envelope.ExpectedAddress)
+			if expectedAddress == "" {
+				return nil, nil, &ConfigError{
+					Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
+					Message: devtestKeysetsEnv + " nested entry is missing expected_index0_address",
+					Metadata: map[string]string{
+						"chain":     normalizedChain,
+						"network":   normalizedNetwork,
+						"keyset_id": keysetID,
+					},
+				}
+			}
 
 			if existing, exists := keysets[keysetID]; exists && existing != keyMaterial {
-				return nil, &ConfigError{
+				return nil, nil, &ConfigError{
 					Code:    "CONFIG_DEVTEST_KEYSETS_INVALID",
 					Message: devtestKeysetsEnv + " defines conflicting key material for keyset_id",
 					Metadata: map[string]string{
@@ -383,10 +416,47 @@ func parseNestedDevtestKeysets(entries map[string]json.RawMessage) (map[string]s
 				}
 			}
 			keysets[keysetID] = keyMaterial
+			preflights = append(preflights, DevtestKeysetPreflightEntry{
+				Chain:                 normalizedChain,
+				Network:               normalizedNetwork,
+				KeysetID:              keysetID,
+				ExtendedPublicKey:     keyMaterial,
+				ExpectedIndex0Address: expectedAddress,
+			})
 		}
 	}
 
-	return keysets, nil
+	return keysets, preflights, nil
+}
+
+func parseLegacyHMACSecrets(raw string) ([]string, *ConfigError) {
+	if raw == "" {
+		return []string{}, nil
+	}
+
+	rawSecrets := []string{}
+	if err := json.Unmarshal([]byte(raw), &rawSecrets); err != nil {
+		return nil, &ConfigError{
+			Code:    "CONFIG_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_INVALID",
+			Message: keysetHashHMACPreviousSecretsEnv + " must be a JSON array of strings",
+		}
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(rawSecrets))
+	for _, secret := range rawSecrets {
+		trimmed := strings.TrimSpace(secret)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+
+	return out, nil
 }
 
 func resolveEnvelopeKeyMaterial(extendedPublicKey string, keyMaterial string, xpub string) string {

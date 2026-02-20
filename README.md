@@ -186,16 +186,17 @@ make chain-down-all
 
 ## Configuration
 
-| Variable                                         | Required     | Default            | Description                                                                                                                                                      |
-| ------------------------------------------------ | ------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                   | Yes          | none               | PostgreSQL DSN                                                                                                                                                   |
-| `PORT`                                           | No           | `8080`             | HTTP listen port                                                                                                                                                 |
-| `OPENAPI_SPEC_PATH`                              | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                |
-| `PAYMENT_REQUEST_ALLOCATION_MODE`                | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                       |
-| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`           | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported) |
-| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`        | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                           |
-| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`          | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                         |
-| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON` | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                |
+| Variable                                                 | Required     | Default            | Description                                                                                                                                                      |
+| -------------------------------------------------------- | ------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                           | Yes          | none               | PostgreSQL DSN                                                                                                                                                   |
+| `PORT`                                                   | No           | `8080`             | HTTP listen port                                                                                                                                                 |
+| `OPENAPI_SPEC_PATH`                                      | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                |
+| `PAYMENT_REQUEST_ALLOCATION_MODE`                        | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                       |
+| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported) |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                           |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No           | `[]`               | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                           |
+| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                         |
+| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                |
 
 ## API Quick Usage
 
@@ -230,7 +231,15 @@ make chain-down-all
 }
 ```
 
-`make service-up` 會先自動執行 keyset preflight（`scripts/local-chains/service_verify_keysets.sh`）逐一驗證 index-0 地址；任一 keyset 驗證失敗會直接退出，`app` 不會啟動。
+`app` 啟動流程本身會做 keyset preflight（index-0 驗證）與 wallet-account hash sync；任一 keyset 驗證失敗都會直接退出，不會啟動服務。`make service-up` 另外保留腳本 preflight 作為本地快速失敗保護。
+
+當你要輪替 `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET` 時，可在過渡期設定：
+
+```bash
+PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON='["old-secret-1","old-secret-2"]'
+```
+
+這樣同一組 key material 在 secret 輪替期間仍可匹配舊 hash，不會被誤判為新 keyset 而強制 `rotated`。
 
 可用以下命令驗證「給定 xpub/tpub 與 index=0 預期地址是否一致」：
 
@@ -444,5 +453,6 @@ make local-down
 - full smoke 顯示 USDT stale artifact：執行 `make chain-down-eth && make chain-up-eth`（會重建 ETH+USDT artifacts）。
 - `service-up` 顯示 `invalid eth artifact usdt_*`：先重跑 `make chain-down-eth && make chain-up-eth`，再執行 `make service-up`。
 - `service-up` 顯示 `startup keyset preflight failed`：檢查 `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON` 內 `expected_index0_address` 與對應 xpub/tpub 是否一致。
+- 服務啟動顯示 `CONFIG_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_INVALID`：確認 `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` 是合法 JSON 字串陣列（例如 `["old-secret"]`）。
 - BTC 餘額不足：重跑 `make chain-up-btc`（bootstrap 會自動補挖）。
 - 服務啟動失敗：用 `docker compose -f deployments/service/docker-compose.yml --project-name chaintx-local-service logs app postgres` 檢查詳細訊息。
