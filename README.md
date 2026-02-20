@@ -78,7 +78,10 @@ make local-up
 此外，`service-up` 會同步 DB catalog：
 
 - 重建/修正 `ethereum/sepolia` baseline（固定 `chain_id=11155111`）
-- upsert `wallet_accounts(wa_eth_local_001 -> ks_eth_local)`
+- 依 `keyset_id` 的 key material `hmac-sha256` 指紋自動決定 wallet account：
+  - hash 不變：沿用現有 active `wallet_account_id`
+  - hash 改變且為歷史已用過的 hash：重啟用該歷史 `wallet_account_id`（保留其 `next_index`）
+  - hash 改變且為新 hash：自動建立新的 `wallet_account_id`，並從 `next_index=0` 開始
 - upsert `asset_catalog(ethereum/local/ETH)`（`chain_id=31337`）
 - upsert `asset_catalog(ethereum/local/USDT)`（`token_contract`/`token_decimals` 來自 `eth.json` 的 USDT 欄位）
 
@@ -183,17 +186,73 @@ make chain-down-all
 
 ## Configuration
 
-| Variable                                         | Required     | Default            | Description                                         |
-| ------------------------------------------------ | ------------ | ------------------ | --------------------------------------------------- |
-| `DATABASE_URL`                                   | Yes          | none               | PostgreSQL DSN                                      |
-| `PORT`                                           | No           | `8080`             | HTTP listen port                                    |
-| `OPENAPI_SPEC_PATH`                              | No           | `api/openapi.yaml` | OpenAPI file path                                   |
-| `PAYMENT_REQUEST_ALLOCATION_MODE`                | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)          |
-| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`           | Devtest only | none               | Keyset JSON (`{"keyset_id":"xpub/tpub/vpub", ...}`) |
-| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`          | No           | `false`            | Allow mainnet allocation in devtest mode            |
-| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON` | No           | built-in allowlist | Override address-scheme allowlist                   |
+| Variable                                         | Required     | Default            | Description                                                                                                                                                      |
+| ------------------------------------------------ | ------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                   | Yes          | none               | PostgreSQL DSN                                                                                                                                                   |
+| `PORT`                                           | No           | `8080`             | HTTP listen port                                                                                                                                                 |
+| `OPENAPI_SPEC_PATH`                              | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                |
+| `PAYMENT_REQUEST_ALLOCATION_MODE`                | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                       |
+| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`           | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported) |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`        | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                           |
+| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`          | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                         |
+| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON` | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                |
 
 ## API Quick Usage
+
+`PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON` 建議使用下列格式（可讀性較高，降低配錯 chain/network 機率）：
+
+```json
+{
+  "bitcoin": {
+    "regtest": {
+      "keyset_id": "ks_btc_regtest",
+      "extended_public_key": "tpub...",
+      "expected_index0_address": "bcrt1..."
+    },
+    "testnet": {
+      "keyset_id": "ks_btc_testnet",
+      "extended_public_key": "vpub...",
+      "expected_index0_address": "tb1..."
+    }
+  },
+  "ethereum": {
+    "sepolia": {
+      "keyset_id": "ks_eth_sepolia",
+      "extended_public_key": "xpub...",
+      "expected_index0_address": "0x..."
+    },
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub...",
+      "expected_index0_address": "0x..."
+    }
+  }
+}
+```
+
+`make service-up` 會先自動執行 keyset preflight（`scripts/local-chains/service_verify_keysets.sh`）逐一驗證 index-0 地址；任一 keyset 驗證失敗會直接退出，`app` 不會啟動。
+
+可用以下命令驗證「給定 xpub/tpub 與 index=0 預期地址是否一致」：
+
+```bash
+go run ./cmd/keysetverify \
+  --chain bitcoin \
+  --network testnet \
+  --address-scheme bip84_p2wpkh \
+  --keyset-id ks_btc_testnet \
+  --extended-public-key 'tpub...' \
+  --expected-address 'tb1...'
+```
+
+```bash
+go run ./cmd/keysetverify \
+  --chain ethereum \
+  --network sepolia \
+  --address-scheme evm_bip44 \
+  --keyset-id ks_eth_sepolia \
+  --extended-public-key 'xpub...' \
+  --expected-address '0x...'
+```
 
 以下命令假設服務位於 `http://localhost:8080`。
 
@@ -384,5 +443,6 @@ make local-down
 - `chain-up-eth` 失敗且訊息為 chain mismatch：確認 `eth-node` chain id 為 `31337`，再重跑 `make chain-down-eth && make chain-up-eth`。
 - full smoke 顯示 USDT stale artifact：執行 `make chain-down-eth && make chain-up-eth`（會重建 ETH+USDT artifacts）。
 - `service-up` 顯示 `invalid eth artifact usdt_*`：先重跑 `make chain-down-eth && make chain-up-eth`，再執行 `make service-up`。
+- `service-up` 顯示 `startup keyset preflight failed`：檢查 `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON` 內 `expected_index0_address` 與對應 xpub/tpub 是否一致。
 - BTC 餘額不足：重跑 `make chain-up-btc`（bootstrap 會自動補挖）。
 - 服務啟動失敗：用 `docker compose -f deployments/service/docker-compose.yml --project-name chaintx-local-service logs app postgres` 檢查詳細訊息。
