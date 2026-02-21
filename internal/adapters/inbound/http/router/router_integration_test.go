@@ -130,6 +130,28 @@ func TestRouterHealthAndSwaggerRoutes(t *testing.T) {
 			t.Fatalf("expected payment request id in body, got %s", rec.Body.String())
 		}
 	})
+
+	t.Run("webhook outbox overview route returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("webhook outbox requeue route returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/webhook-outbox/dlq/evt_1/requeue", nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 func TestRouterHealthzRejectsNonGET(t *testing.T) {
@@ -159,12 +181,20 @@ func newTestRouter(openAPISpecPath string) *http.ServeMux {
 		stubGetPaymentRequestUseCase{},
 		logger,
 	)
+	webhookOutboxController := controllers.NewWebhookOutboxController(
+		stubGetWebhookOutboxOverviewUseCase{},
+		stubListWebhookDLQEventsUseCase{},
+		stubRequeueWebhookDLQEventUseCase{},
+		stubCancelWebhookOutboxEventUseCase{},
+		logger,
+	)
 
 	return New(Dependencies{
 		HealthController:          controllers.NewHealthController(healthUseCase, logger),
 		SwaggerController:         controllers.NewSwaggerController(openAPIUseCase, logger),
 		AssetsController:          assetsController,
 		PaymentRequestsController: paymentRequestsController,
+		WebhookOutboxController:   webhookOutboxController,
 	})
 }
 
@@ -229,5 +259,36 @@ func (stubGetPaymentRequestUseCase) Execute(_ context.Context, query dto.GetPaym
 			AddressScheme:   "bip84_p2wpkh",
 			DerivationIndex: 1,
 		},
+	}, nil
+}
+
+type stubGetWebhookOutboxOverviewUseCase struct{}
+
+func (stubGetWebhookOutboxOverviewUseCase) Execute(_ context.Context, _ dto.GetWebhookOutboxOverviewQuery) (dto.WebhookOutboxOverview, *apperrors.AppError) {
+	return dto.WebhookOutboxOverview{}, nil
+}
+
+type stubListWebhookDLQEventsUseCase struct{}
+
+func (stubListWebhookDLQEventsUseCase) Execute(_ context.Context, _ dto.ListWebhookDLQEventsQuery) (dto.ListWebhookDLQEventsOutput, *apperrors.AppError) {
+	return dto.ListWebhookDLQEventsOutput{}, nil
+}
+
+type stubRequeueWebhookDLQEventUseCase struct{}
+
+func (stubRequeueWebhookDLQEventUseCase) Execute(_ context.Context, command dto.RequeueWebhookDLQEventCommand) (dto.RequeueWebhookDLQEventOutput, *apperrors.AppError) {
+	return dto.RequeueWebhookDLQEventOutput{
+		EventID:        command.EventID,
+		DeliveryStatus: "pending",
+	}, nil
+}
+
+type stubCancelWebhookOutboxEventUseCase struct{}
+
+func (stubCancelWebhookOutboxEventUseCase) Execute(_ context.Context, command dto.CancelWebhookOutboxEventCommand) (dto.CancelWebhookOutboxEventOutput, *apperrors.AppError) {
+	return dto.CancelWebhookOutboxEventOutput{
+		EventID:        command.EventID,
+		DeliveryStatus: "failed",
+		LastError:      "manual_cancelled",
 	}, nil
 }

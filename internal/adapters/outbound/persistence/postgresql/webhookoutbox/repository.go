@@ -16,6 +16,7 @@ type Repository struct {
 }
 
 var _ portsout.WebhookOutboxRepository = (*Repository)(nil)
+var _ portsout.WebhookOutboxReadModel = (*Repository)(nil)
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
@@ -223,6 +224,219 @@ WHERE id = $1
 	)
 }
 
+func (r *Repository) RequeueFailedByEventID(
+	ctx context.Context,
+	eventID string,
+	updatedAt time.Time,
+) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
+	const query = `
+WITH selected AS (
+  SELECT id, delivery_status
+  FROM app.webhook_outbox_events
+  WHERE event_id = $1
+  FOR UPDATE
+),
+updated AS (
+  UPDATE app.webhook_outbox_events AS e
+  SET
+    delivery_status = 'pending',
+    attempts = 0,
+    next_attempt_at = $2,
+    last_error = NULL,
+    delivered_at = NULL,
+    lease_owner = NULL,
+    lease_until = NULL,
+    updated_at = $2
+  FROM selected AS s
+  WHERE e.id = s.id
+    AND s.delivery_status = 'failed'
+  RETURNING e.id
+)
+SELECT
+  EXISTS(SELECT 1 FROM selected) AS found,
+  COALESCE((SELECT delivery_status FROM selected LIMIT 1), '') AS current_status,
+  EXISTS(SELECT 1 FROM updated) AS updated
+`
+	return runWebhookOutboxMutationWithStatus(ctx, r.db, query, strings.TrimSpace(eventID), updatedAt.UTC())
+}
+
+func (r *Repository) CancelByEventID(
+	ctx context.Context,
+	eventID string,
+	lastError string,
+	updatedAt time.Time,
+) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
+	const query = `
+WITH selected AS (
+  SELECT id, delivery_status
+  FROM app.webhook_outbox_events
+  WHERE event_id = $1
+  FOR UPDATE
+),
+updated AS (
+  UPDATE app.webhook_outbox_events AS e
+  SET
+    delivery_status = 'failed',
+    last_error = $2,
+    lease_owner = NULL,
+    lease_until = NULL,
+    updated_at = $3
+  FROM selected AS s
+  WHERE e.id = s.id
+    AND s.delivery_status IN ('pending', 'failed')
+  RETURNING e.id
+)
+SELECT
+  EXISTS(SELECT 1 FROM selected) AS found,
+  COALESCE((SELECT delivery_status FROM selected LIMIT 1), '') AS current_status,
+  EXISTS(SELECT 1 FROM updated) AS updated
+`
+	return runWebhookOutboxMutationWithStatus(
+		ctx,
+		r.db,
+		query,
+		strings.TrimSpace(eventID),
+		strings.TrimSpace(lastError),
+		updatedAt.UTC(),
+	)
+}
+
+func (r *Repository) GetOverview(
+	ctx context.Context,
+	now time.Time,
+) (dto.WebhookOutboxOverview, *apperrors.AppError) {
+	const query = `
+SELECT
+  COALESCE(SUM(CASE WHEN delivery_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+  COALESCE(
+    SUM(
+      CASE
+        WHEN delivery_status = 'pending'
+         AND next_attempt_at <= $1
+         AND (lease_until IS NULL OR lease_until <= $1)
+        THEN 1
+        ELSE 0
+      END
+    ),
+    0
+  ) AS pending_ready_count,
+  COALESCE(SUM(CASE WHEN delivery_status = 'pending' AND attempts > 0 THEN 1 ELSE 0 END), 0) AS retrying_count,
+  COALESCE(SUM(CASE WHEN delivery_status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+  COALESCE(SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered_count,
+  MIN(CASE WHEN delivery_status = 'pending' THEN created_at END) AS oldest_pending_created_at
+FROM app.webhook_outbox_events
+`
+
+	output := dto.WebhookOutboxOverview{}
+	var oldestPending sql.NullTime
+	err := r.db.QueryRowContext(ctx, query, now.UTC()).Scan(
+		&output.PendingCount,
+		&output.PendingReadyCount,
+		&output.RetryingCount,
+		&output.FailedCount,
+		&output.DeliveredCount,
+		&oldestPending,
+	)
+	if err != nil {
+		return dto.WebhookOutboxOverview{}, apperrors.NewInternal(
+			"webhook_outbox_query_failed",
+			"failed to query webhook outbox overview",
+			map[string]any{"error": err.Error()},
+		)
+	}
+
+	if oldestPending.Valid {
+		oldest := oldestPending.Time.UTC()
+		output.OldestPendingCreatedAt = &oldest
+		ageSeconds := now.UTC().Sub(oldest).Seconds()
+		if ageSeconds < 0 {
+			ageSeconds = 0
+		}
+		age := int64(ageSeconds)
+		output.OldestPendingAgeSec = &age
+	}
+
+	return output, nil
+}
+
+func (r *Repository) ListDLQ(
+	ctx context.Context,
+	limit int,
+) ([]dto.WebhookDLQEvent, *apperrors.AppError) {
+	const query = `
+SELECT
+  event_id,
+  event_type,
+  payment_request_id,
+  destination_url,
+  attempts,
+  max_attempts,
+  last_error,
+  created_at,
+  updated_at,
+  delivered_at
+FROM app.webhook_outbox_events
+WHERE delivery_status = 'failed'
+ORDER BY updated_at DESC, id DESC
+LIMIT $1
+`
+
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, apperrors.NewInternal(
+			"webhook_outbox_query_failed",
+			"failed to list webhook dlq events",
+			map[string]any{"error": err.Error()},
+		)
+	}
+	defer rows.Close()
+
+	output := make([]dto.WebhookDLQEvent, 0, limit)
+	for rows.Next() {
+		item := dto.WebhookDLQEvent{}
+		var (
+			lastError   sql.NullString
+			deliveredAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&item.EventID,
+			&item.EventType,
+			&item.PaymentRequestID,
+			&item.DestinationURL,
+			&item.Attempts,
+			&item.MaxAttempts,
+			&lastError,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&deliveredAt,
+		); err != nil {
+			return nil, apperrors.NewInternal(
+				"webhook_outbox_query_failed",
+				"failed to parse webhook dlq event row",
+				map[string]any{"error": err.Error()},
+			)
+		}
+		if lastError.Valid {
+			value := lastError.String
+			item.LastError = &value
+		}
+		if deliveredAt.Valid {
+			value := deliveredAt.Time.UTC()
+			item.DeliveredAt = &value
+		}
+		output = append(output, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperrors.NewInternal(
+			"webhook_outbox_query_failed",
+			"failed while iterating webhook dlq rows",
+			map[string]any{"error": err.Error()},
+		)
+	}
+
+	return output, nil
+}
+
 func execRowsAffected(
 	ctx context.Context,
 	db *sql.DB,
@@ -246,4 +460,26 @@ func execRowsAffected(
 		)
 	}
 	return rowsAffected == 1, nil
+}
+
+func runWebhookOutboxMutationWithStatus(
+	ctx context.Context,
+	db *sql.DB,
+	query string,
+	args ...any,
+) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
+	result := dto.WebhookOutboxMutationResult{}
+	if err := db.QueryRowContext(ctx, query, args...).Scan(
+		&result.Found,
+		&result.CurrentStatus,
+		&result.Updated,
+	); err != nil {
+		return dto.WebhookOutboxMutationResult{}, apperrors.NewInternal(
+			"webhook_outbox_update_failed",
+			"failed to update webhook outbox event",
+			map[string]any{"error": err.Error()},
+		)
+	}
+	result.CurrentStatus = strings.ToLower(strings.TrimSpace(result.CurrentStatus))
+	return result, nil
 }

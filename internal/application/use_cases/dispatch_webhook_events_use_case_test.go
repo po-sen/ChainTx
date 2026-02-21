@@ -108,6 +108,9 @@ func TestDispatchWebhookEventsUseCaseMarksDeliveredOnSuccess(t *testing.T) {
 	if output.Claimed != 1 || output.Sent != 1 {
 		t.Fatalf("expected claimed=1 sent=1, got %+v", output)
 	}
+	if output.HTTP2xxCount != 1 || output.HTTP4xxCount != 0 || output.HTTP5xxCount != 0 || output.NetworkErrorCount != 0 {
+		t.Fatalf("expected 2xx=1 4xx=0 5xx=0 network=0, got %+v", output)
+	}
 	if len(repo.delivered) != 1 || repo.delivered[0].id != 1 {
 		t.Fatalf("expected delivered id=1, got %+v", repo.delivered)
 	}
@@ -190,6 +193,9 @@ func TestDispatchWebhookEventsUseCaseRetriesOnFailure(t *testing.T) {
 	}
 	if output.Retried != 1 || output.Failed != 0 {
 		t.Fatalf("expected retried=1 failed=0, got %+v", output)
+	}
+	if output.NetworkErrorCount != 1 || output.HTTP2xxCount != 0 || output.HTTP4xxCount != 0 || output.HTTP5xxCount != 0 {
+		t.Fatalf("expected network=1 only, got %+v", output)
 	}
 	if len(repo.retried) != 1 {
 		t.Fatalf("expected one retry update, got %+v", repo.retried)
@@ -277,8 +283,52 @@ func TestDispatchWebhookEventsUseCaseMarksFailedAtMaxAttempts(t *testing.T) {
 	if output.Failed != 1 || output.Retried != 0 {
 		t.Fatalf("expected failed=1 retried=0, got %+v", output)
 	}
+	if output.HTTP5xxCount != 1 || output.HTTP2xxCount != 0 || output.HTTP4xxCount != 0 || output.NetworkErrorCount != 0 {
+		t.Fatalf("expected 5xx=1 only, got %+v", output)
+	}
 	if len(repo.failed) != 1 || repo.failed[0].attempts != 3 {
 		t.Fatalf("expected terminal failure attempts=3, got %+v", repo.failed)
+	}
+}
+
+func TestDispatchWebhookEventsUseCaseCounts4xxBucket(t *testing.T) {
+	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	repo := &fakeWebhookOutboxRepository{
+		claimed: []dto.PendingWebhookOutboxEvent{
+			{
+				ID:             31,
+				EventID:        "evt_31",
+				EventType:      "payment_request.status_changed",
+				DestinationURL: "https://hooks.example.com/evt_31",
+				Payload:        []byte(`{"event_id":"evt_31"}`),
+				Attempts:       0,
+				MaxAttempts:    3,
+			},
+		},
+	}
+	gateway := &fakeWebhookEventGateway{
+		results: map[string]dto.SendWebhookEventOutput{
+			"evt_31": {StatusCode: 429},
+		},
+	}
+	useCase := NewDispatchWebhookEventsUseCase(repo, gateway)
+
+	output, appErr := useCase.Execute(context.Background(), dto.DispatchWebhookEventsCommand{
+		Now:            now,
+		BatchSize:      10,
+		WorkerID:       "webhook-worker-a",
+		LeaseDuration:  30 * time.Second,
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     60 * time.Second,
+	})
+	if appErr != nil {
+		t.Fatalf("expected no error, got %+v", appErr)
+	}
+	if output.HTTP4xxCount != 1 || output.HTTP2xxCount != 0 || output.HTTP5xxCount != 0 || output.NetworkErrorCount != 0 {
+		t.Fatalf("expected 4xx=1 only, got %+v", output)
+	}
+	if output.Retried != 1 {
+		t.Fatalf("expected retried=1, got %+v", output)
 	}
 }
 
@@ -559,6 +609,23 @@ func (f *fakeWebhookOutboxRepository) RenewLease(
 		}
 	}
 	return true, nil
+}
+
+func (f *fakeWebhookOutboxRepository) RequeueFailedByEventID(
+	_ context.Context,
+	_ string,
+	_ time.Time,
+) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
+	return dto.WebhookOutboxMutationResult{}, nil
+}
+
+func (f *fakeWebhookOutboxRepository) CancelByEventID(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ time.Time,
+) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
+	return dto.WebhookOutboxMutationResult{}, nil
 }
 
 func (f *fakeWebhookOutboxRepository) renewCount() int {

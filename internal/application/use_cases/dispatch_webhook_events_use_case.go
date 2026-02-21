@@ -163,6 +163,7 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 		stopHeartbeat()
 		<-heartbeatDoneCh
 		heartbeatErr := drainWebhookHeartbeatError(heartbeatErrCh)
+		recordWebhookDeliveryBucket(&output, sendOutput.StatusCode, sendErr)
 		if sendErr == nil && sendOutput.StatusCode >= 200 && sendOutput.StatusCode <= 299 {
 			updated, deliveredErr := u.repository.MarkDelivered(ctx, row.ID, workerID, now)
 			if deliveredErr != nil {
@@ -372,6 +373,31 @@ func webhookDispatchErrorMessage(appErr *apperrors.AppError, statusCode int) str
 		return "webhook dispatch failed"
 	}
 	return fmt.Sprintf("webhook endpoint returned status %d", statusCode)
+}
+
+func recordWebhookDeliveryBucket(
+	output *dto.DispatchWebhookEventsOutput,
+	statusCode int,
+	sendErr *apperrors.AppError,
+) {
+	if output == nil {
+		return
+	}
+	if sendErr != nil {
+		output.NetworkErrorCount++
+		return
+	}
+
+	switch {
+	case statusCode >= 200 && statusCode <= 299:
+		output.HTTP2xxCount++
+	case statusCode >= 400 && statusCode <= 499:
+		output.HTTP4xxCount++
+	case statusCode >= 500 && statusCode <= 599:
+		output.HTTP5xxCount++
+	default:
+		output.NetworkErrorCount++
+	}
 }
 
 func webhookRetryBackoff(attempts int, initial time.Duration, max time.Duration) time.Duration {

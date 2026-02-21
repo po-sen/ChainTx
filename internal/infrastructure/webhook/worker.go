@@ -106,7 +106,7 @@ func (w *Worker) runCycle(ctx context.Context) {
 	}
 
 	w.logf(
-		"webhook dispatch cycle completed worker_id=%s claimed=%d sent=%d retried=%d failed=%d skipped=%d errors=%d latency_ms=%d",
+		"webhook dispatch cycle completed worker_id=%s claimed=%d sent=%d retried=%d failed=%d skipped=%d errors=%d http_2xx=%d http_4xx=%d http_5xx=%d network_error=%d latency_ms=%d",
 		w.workerID,
 		output.Claimed,
 		output.Sent,
@@ -114,6 +114,10 @@ func (w *Worker) runCycle(ctx context.Context) {
 		output.Failed,
 		output.Skipped,
 		output.Errors,
+		output.HTTP2xxCount,
+		output.HTTP4xxCount,
+		output.HTTP5xxCount,
+		output.NetworkErrorCount,
 		time.Since(startedAt).Milliseconds(),
 	)
 }

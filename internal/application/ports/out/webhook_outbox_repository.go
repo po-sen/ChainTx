@@ -46,4 +46,15 @@ type WebhookOutboxRepository interface {
 		leaseUntil time.Time,
 		updatedAt time.Time,
 	) (bool, *apperrors.AppError)
+	RequeueFailedByEventID(
+		ctx context.Context,
+		eventID string,
+		updatedAt time.Time,
+	) (dto.WebhookOutboxMutationResult, *apperrors.AppError)
+	CancelByEventID(
+		ctx context.Context,
+		eventID string,
+		lastError string,
+		updatedAt time.Time,
+	) (dto.WebhookOutboxMutationResult, *apperrors.AppError)
 }

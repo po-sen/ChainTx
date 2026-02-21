@@ -93,6 +93,7 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 	assetCatalogReadModel := postgresqlassetcatalog.NewReadModel(runtimeDeps.databasePool)
 	paymentRequestRepository := newPaymentRequestRepository(runtimeDeps.databasePool, cfg, logger)
 	paymentRequestReadModel := postgresqlpaymentrequest.NewReadModel(runtimeDeps.databasePool)
+	webhookOutboxRepository := postgresqlwebhookoutbox.NewRepository(runtimeDeps.databasePool)
 	chainObserverGateway := buildChainObserverGateway(cfg)
 
 	listAssetsUseCase := use_cases.NewListAssetsUseCase(assetCatalogReadModel)
@@ -104,6 +105,18 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 		cfg.WebhookURLAllowList,
 	)
 	getPaymentRequestUseCase := use_cases.NewGetPaymentRequestUseCase(paymentRequestReadModel)
+	getWebhookOutboxOverviewUseCase := use_cases.NewGetWebhookOutboxOverviewUseCase(
+		webhookOutboxRepository,
+	)
+	listWebhookDLQEventsUseCase := use_cases.NewListWebhookDLQEventsUseCase(
+		webhookOutboxRepository,
+	)
+	requeueWebhookDLQEventUseCase := use_cases.NewRequeueWebhookDLQEventUseCase(
+		webhookOutboxRepository,
+	)
+	cancelWebhookOutboxEventUseCase := use_cases.NewCancelWebhookOutboxEventUseCase(
+		webhookOutboxRepository,
+	)
 	reconcilePaymentRequestsUseCase := use_cases.NewReconcilePaymentRequestsUseCase(
 		paymentRequestRepository,
 		chainObserverGateway,
@@ -118,12 +131,20 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 		getPaymentRequestUseCase,
 		logger,
 	)
+	webhookOutboxController := controllers.NewWebhookOutboxController(
+		getWebhookOutboxOverviewUseCase,
+		listWebhookDLQEventsUseCase,
+		requeueWebhookDLQEventUseCase,
+		cancelWebhookOutboxEventUseCase,
+		logger,
+	)
 
 	router := httpRouter.New(httpRouter.Dependencies{
 		HealthController:          healthController,
 		SwaggerController:         swaggerController,
 		AssetsController:          assetsController,
 		PaymentRequestsController: paymentRequestsController,
+		WebhookOutboxController:   webhookOutboxController,
 	})
 
 	server := httpserver.New(cfg.Address(), router, logger)

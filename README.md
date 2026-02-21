@@ -361,6 +361,13 @@ Webhook 請求會帶以下 headers：
 - `PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS`：`0..10000`，控制 retry backoff 抖動幅度（`0` 代表不抖動）。
 - `PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET`：每筆事件可用的 retry 次數上限（不含首次送出）；`0` 代表不啟用 runtime budget（只看 `max_attempts`）。
 
+Webhook outbox 維運端點：
+
+- `GET /v1/webhook-outbox/overview`：回傳 backlog 快照（`pending_count`、`pending_ready_count`、`retrying_count`、`failed_count`、`oldest_pending_age_seconds` 等）。
+- `GET /v1/webhook-outbox/dlq?limit=50`：列出目前 `failed`（DLQ）事件。
+- `POST /v1/webhook-outbox/dlq/{event_id}/requeue`：將單筆 `failed` 事件重排回 `pending`。
+- `POST /v1/webhook-outbox/events/{event_id}/cancel`：手動取消事件（標記 `failed`，並寫入 `manual_cancelled` reason）。
+
 若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
 
 ```bash
@@ -423,6 +430,33 @@ curl -i \
     "expires_in_seconds":3600,
     "metadata":{"order_id":"A123"}
   }'
+```
+
+Webhook outbox overview：
+
+```bash
+curl -i http://localhost:8080/v1/webhook-outbox/overview
+```
+
+列出 DLQ（failed）事件：
+
+```bash
+curl -i 'http://localhost:8080/v1/webhook-outbox/dlq?limit=50'
+```
+
+手動 requeue 單筆 DLQ 事件：
+
+```bash
+curl -i -X POST http://localhost:8080/v1/webhook-outbox/dlq/evt_example/requeue
+```
+
+手動 cancel 單筆事件：
+
+```bash
+curl -i \
+  -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/v1/webhook-outbox/events/evt_example/cancel \
+  -d '{"reason":"operator_cancelled"}'
 ```
 
 ## Local Manual Receive Test Runbook

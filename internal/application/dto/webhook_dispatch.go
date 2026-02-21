@@ -14,13 +14,17 @@ type DispatchWebhookEventsCommand struct {
 }
 
 type DispatchWebhookEventsOutput struct {
-	Claimed   int
-	Sent      int
-	Retried   int
-	Failed    int
-	Skipped   int
-	Errors    int
-	LatencyMS int64
+	Claimed           int
+	Sent              int
+	Retried           int
+	Failed            int
+	Skipped           int
+	Errors            int
+	HTTP2xxCount      int
+	HTTP4xxCount      int
+	HTTP5xxCount      int
+	NetworkErrorCount int
+	LatencyMS         int64
 }
 
 type PendingWebhookOutboxEvent struct {

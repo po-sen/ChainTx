@@ -221,6 +221,125 @@ paths:
                       details:
                         id: pr_missing
 
+  /v1/webhook-outbox/overview:
+    get:
+      summary: Get webhook outbox overview snapshot
+      operationId: getWebhookOutboxOverview
+      tags:
+        - webhook
+      responses:
+        "200":
+          description: Webhook outbox summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookOutboxOverviewResponse'
+
+  /v1/webhook-outbox/dlq:
+    get:
+      summary: List webhook DLQ events
+      operationId: listWebhookDLQEvents
+      tags:
+        - webhook
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Failed webhook outbox events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDLQListResponse'
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/webhook-outbox/dlq/{event_id}/requeue:
+    post:
+      summary: Requeue failed webhook DLQ event
+      operationId: requeueWebhookDLQEvent
+      tags:
+        - webhook
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Requeued to pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDLQRequeueResponse'
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Event cannot be requeued from current status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/webhook-outbox/events/{event_id}/cancel:
+    post:
+      summary: Cancel webhook outbox event delivery
+      operationId: cancelWebhookOutboxEvent
+      tags:
+        - webhook
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookOutboxCancelRequest'
+      responses:
+        "200":
+          description: Event cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookOutboxCancelResponse'
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Event cannot be cancelled from current status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
     ErrorResponse:
@@ -407,3 +526,143 @@ components:
         token_decimals:
           type: integer
           example: 6
+
+    WebhookOutboxOverviewResponse:
+      type: object
+      required:
+        - pending_count
+        - pending_ready_count
+        - retrying_count
+        - failed_count
+        - delivered_count
+      properties:
+        pending_count:
+          type: integer
+          format: int64
+          example: 3
+        pending_ready_count:
+          type: integer
+          format: int64
+          example: 2
+        retrying_count:
+          type: integer
+          format: int64
+          example: 1
+        failed_count:
+          type: integer
+          format: int64
+          example: 4
+        delivered_count:
+          type: integer
+          format: int64
+          example: 120
+        oldest_pending_created_at:
+          type: string
+          format: date-time
+          nullable: true
+        oldest_pending_age_seconds:
+          type: integer
+          format: int64
+          nullable: true
+          example: 87
+
+    WebhookDLQListResponse:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDLQEvent'
+
+    WebhookDLQEvent:
+      type: object
+      required:
+        - event_id
+        - event_type
+        - payment_request_id
+        - destination_url
+        - attempts
+        - max_attempts
+        - created_at
+        - updated_at
+      properties:
+        event_id:
+          type: string
+          example: evt_4e4583f3f6f6
+        event_type:
+          type: string
+          example: payment_request.status_changed
+        payment_request_id:
+          type: string
+          example: pr_5fd7279523aa31ef6bb8017f
+        destination_url:
+          type: string
+          format: uri
+          example: https://hooks.example.com/chaintx
+        attempts:
+          type: integer
+          example: 8
+        max_attempts:
+          type: integer
+          example: 8
+        last_error:
+          type: string
+          nullable: true
+          example: webhook endpoint returned status 500
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    WebhookDLQRequeueResponse:
+      type: object
+      required:
+        - event_id
+        - delivery_status
+        - updated_at
+      properties:
+        event_id:
+          type: string
+          example: evt_4e4583f3f6f6
+        delivery_status:
+          type: string
+          example: pending
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookOutboxCancelRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          example: operator_cancelled
+
+    WebhookOutboxCancelResponse:
+      type: object
+      required:
+        - event_id
+        - delivery_status
+        - last_error
+        - updated_at
+      properties:
+        event_id:
+          type: string
+          example: evt_4e4583f3f6f6
+        delivery_status:
+          type: string
+          example: failed
+        last_error:
+          type: string
+          example: "manual_cancelled: operator_cancelled"
+        updated_at:
+          type: string
+          format: date-time
