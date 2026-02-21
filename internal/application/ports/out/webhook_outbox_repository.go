@@ -39,4 +39,11 @@ type WebhookOutboxRepository interface {
 		lastError string,
 		updatedAt time.Time,
 	) (bool, *apperrors.AppError)
+	RenewLease(
+		ctx context.Context,
+		id int64,
+		leaseOwner string,
+		leaseUntil time.Time,
+		updatedAt time.Time,
+	) (bool, *apperrors.AppError)
 }

@@ -196,6 +196,33 @@ WHERE id = $1
 	)
 }
 
+func (r *Repository) RenewLease(
+	ctx context.Context,
+	id int64,
+	leaseOwner string,
+	leaseUntil time.Time,
+	updatedAt time.Time,
+) (bool, *apperrors.AppError) {
+	const query = `
+UPDATE app.webhook_outbox_events
+SET
+  lease_until = $3,
+  updated_at = $4
+WHERE id = $1
+  AND delivery_status = 'pending'
+  AND lease_owner = $2
+`
+	return execRowsAffected(
+		ctx,
+		r.db,
+		query,
+		id,
+		strings.TrimSpace(leaseOwner),
+		leaseUntil.UTC(),
+		updatedAt.UTC(),
+	)
+}
+
 func execRowsAffected(
 	ctx context.Context,
 	db *sql.DB,

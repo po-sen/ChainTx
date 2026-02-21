@@ -84,6 +84,10 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 			},
 		)
 	}
+	heartbeatInterval, heartbeatIntervalErr := webhookLeaseHeartbeatInterval(command.LeaseDuration)
+	if heartbeatIntervalErr != nil {
+		return dto.DispatchWebhookEventsOutput{}, heartbeatIntervalErr
+	}
 
 	startedAt := time.Now().UTC()
 	now := command.Now.UTC()
@@ -114,12 +118,31 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 			continue
 		}
 
+		heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+		heartbeatErrCh := make(chan *apperrors.AppError, 1)
+		heartbeatDoneCh := make(chan struct{})
+		go func(eventID string, id int64) {
+			defer close(heartbeatDoneCh)
+			u.runLeaseHeartbeat(
+				heartbeatCtx,
+				eventID,
+				id,
+				workerID,
+				command.LeaseDuration,
+				heartbeatInterval,
+				heartbeatErrCh,
+			)
+		}(row.EventID, row.ID)
+
 		sendOutput, sendErr := u.gateway.SendWebhookEvent(ctx, dto.SendWebhookEventInput{
 			EventID:        row.EventID,
 			EventType:      row.EventType,
 			DestinationURL: destinationURL,
 			Payload:        row.Payload,
 		})
+		stopHeartbeat()
+		<-heartbeatDoneCh
+		heartbeatErr := drainWebhookHeartbeatError(heartbeatErrCh)
 		if sendErr == nil && sendOutput.StatusCode >= 200 && sendOutput.StatusCode <= 299 {
 			updated, deliveredErr := u.repository.MarkDelivered(ctx, row.ID, workerID, now)
 			if deliveredErr != nil {
@@ -129,6 +152,9 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 				output.Sent++
 			} else {
 				output.Skipped++
+			}
+			if heartbeatErr != nil {
+				return output, heartbeatErr
 			}
 			continue
 		}
@@ -153,6 +179,9 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 			} else {
 				output.Skipped++
 			}
+			if heartbeatErr != nil {
+				return output, heartbeatErr
+			}
 			continue
 		}
 
@@ -175,10 +204,128 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 		} else {
 			output.Skipped++
 		}
+		if heartbeatErr != nil {
+			return output, heartbeatErr
+		}
 	}
 
 	output.LatencyMS = time.Since(startedAt).Milliseconds()
 	return output, nil
+}
+
+func (u *dispatchWebhookEventsUseCase) runLeaseHeartbeat(
+	ctx context.Context,
+	eventID string,
+	id int64,
+	workerID string,
+	leaseDuration time.Duration,
+	interval time.Duration,
+	errorCh chan<- *apperrors.AppError,
+) {
+	renewAt := time.Now().UTC()
+	if appErr := u.renewWebhookLease(ctx, eventID, id, workerID, leaseDuration, renewAt); appErr != nil {
+		reportWebhookHeartbeatError(errorCh, appErr)
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case tickAt := <-ticker.C:
+			if appErr := u.renewWebhookLease(
+				ctx,
+				eventID,
+				id,
+				workerID,
+				leaseDuration,
+				tickAt.UTC(),
+			); appErr != nil {
+				reportWebhookHeartbeatError(errorCh, appErr)
+				return
+			}
+		}
+	}
+}
+
+func (u *dispatchWebhookEventsUseCase) renewWebhookLease(
+	ctx context.Context,
+	eventID string,
+	id int64,
+	workerID string,
+	leaseDuration time.Duration,
+	updatedAt time.Time,
+) *apperrors.AppError {
+	renewed, renewErr := u.repository.RenewLease(
+		ctx,
+		id,
+		workerID,
+		updatedAt.Add(leaseDuration),
+		updatedAt,
+	)
+	if renewErr != nil {
+		return apperrors.NewInternal(
+			"dispatch_webhook_lease_renew_failed",
+			"failed to renew webhook outbox lease",
+			map[string]any{
+				"event_id":  eventID,
+				"row_id":    id,
+				"worker_id": workerID,
+				"error":     renewErr.Message,
+			},
+		)
+	}
+	if !renewed {
+		return apperrors.NewInternal(
+			"dispatch_webhook_lease_lost",
+			"webhook outbox lease ownership was lost during dispatch",
+			map[string]any{
+				"event_id":  eventID,
+				"row_id":    id,
+				"worker_id": workerID,
+			},
+		)
+	}
+	return nil
+}
+
+func webhookLeaseHeartbeatInterval(leaseDuration time.Duration) (time.Duration, *apperrors.AppError) {
+	interval := leaseDuration / 3
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	if interval >= leaseDuration {
+		interval = leaseDuration / 2
+	}
+	if interval <= 0 || interval >= leaseDuration {
+		return 0, apperrors.NewValidation(
+			"dispatch_webhook_lease_heartbeat_interval_invalid",
+			"dispatch webhook lease duration is too small for heartbeat interval",
+			map[string]any{"lease_duration": leaseDuration.String()},
+		)
+	}
+	return interval, nil
+}
+
+func reportWebhookHeartbeatError(errorCh chan<- *apperrors.AppError, appErr *apperrors.AppError) {
+	if appErr == nil {
+		return
+	}
+	select {
+	case errorCh <- appErr:
+	default:
+	}
+}
+
+func drainWebhookHeartbeatError(errorCh <-chan *apperrors.AppError) *apperrors.AppError {
+	select {
+	case appErr := <-errorCh:
+		return appErr
+	default:
+		return nil
+	}
 }
 
 func webhookDispatchErrorMessage(appErr *apperrors.AppError, statusCode int) string {
