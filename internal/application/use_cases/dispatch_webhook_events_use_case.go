@@ -3,6 +3,7 @@ package use_cases
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -82,6 +83,20 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 				"initial_backoff": command.InitialBackoff.String(),
 				"max_backoff":     command.MaxBackoff.String(),
 			},
+		)
+	}
+	if command.RetryJitterBPS < 0 || command.RetryJitterBPS > 10000 {
+		return dto.DispatchWebhookEventsOutput{}, apperrors.NewValidation(
+			"dispatch_webhook_retry_jitter_bps_invalid",
+			"dispatch webhook retry jitter bps must be between 0 and 10000",
+			map[string]any{"retry_jitter_bps": command.RetryJitterBPS},
+		)
+	}
+	if command.RetryBudget < 0 {
+		return dto.DispatchWebhookEventsOutput{}, apperrors.NewValidation(
+			"dispatch_webhook_retry_budget_invalid",
+			"dispatch webhook retry budget must be a non-negative integer",
+			map[string]any{"retry_budget": command.RetryBudget},
 		)
 	}
 	heartbeatInterval, heartbeatIntervalErr := webhookLeaseHeartbeatInterval(command.LeaseDuration)
@@ -166,8 +181,9 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 
 		output.Errors++
 		nextAttempts := row.Attempts + 1
+		effectiveMaxAttempts := webhookEffectiveMaxAttempts(row.MaxAttempts, command.RetryBudget)
 		errorMessage := webhookDispatchErrorMessage(sendErr, sendOutput.StatusCode)
-		if nextAttempts >= row.MaxAttempts {
+		if nextAttempts >= effectiveMaxAttempts {
 			updated, markErr := u.repository.MarkFailed(
 				ctx,
 				row.ID,
@@ -190,7 +206,14 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 			continue
 		}
 
-		backoff := webhookRetryBackoff(nextAttempts, command.InitialBackoff, command.MaxBackoff)
+		backoff := webhookRetryBackoffWithJitter(
+			nextAttempts,
+			command.InitialBackoff,
+			command.MaxBackoff,
+			command.RetryJitterBPS,
+			row.EventID,
+			row.ID,
+		)
 		nextAttemptAt := now.Add(backoff)
 		updated, markErr := u.repository.MarkRetry(
 			ctx,
@@ -368,4 +391,69 @@ func webhookRetryBackoff(attempts int, initial time.Duration, max time.Duration)
 	}
 
 	return backoff
+}
+
+func webhookEffectiveMaxAttempts(rowMaxAttempts int, retryBudget int) int {
+	effective := rowMaxAttempts
+	if retryBudget <= 0 {
+		return effective
+	}
+	budgetMaxAttempts := retryBudget + 1
+	if budgetMaxAttempts < effective {
+		effective = budgetMaxAttempts
+	}
+	return effective
+}
+
+func webhookRetryBackoffWithJitter(
+	attempts int,
+	initial time.Duration,
+	max time.Duration,
+	jitterBPS int,
+	eventID string,
+	rowID int64,
+) time.Duration {
+	base := webhookRetryBackoff(attempts, initial, max)
+	if jitterBPS <= 0 || base <= 0 {
+		return base
+	}
+
+	offsetBPS := webhookDeterministicJitterOffsetBPS(eventID, rowID, attempts, jitterBPS)
+	factorBPS := 10000 + offsetBPS
+	if factorBPS < 1 {
+		factorBPS = 1
+	}
+	jitteredNanos := int64(base) * int64(factorBPS) / 10000
+	if jitteredNanos <= 0 {
+		jitteredNanos = 1
+	}
+	jittered := time.Duration(jitteredNanos)
+	if jittered > max {
+		return max
+	}
+	return jittered
+}
+
+func webhookDeterministicJitterOffsetBPS(
+	eventID string,
+	rowID int64,
+	attempt int,
+	jitterBPS int,
+) int {
+	if jitterBPS <= 0 {
+		return 0
+	}
+	span := (jitterBPS * 2) + 1
+	if span <= 1 {
+		return 0
+	}
+
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(strings.TrimSpace(eventID)))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%d", rowID)))
+	_, _ = hasher.Write([]byte("|"))
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%d", attempt)))
+	value := int(hasher.Sum32() % uint32(span))
+	return value - jitterBPS
 }

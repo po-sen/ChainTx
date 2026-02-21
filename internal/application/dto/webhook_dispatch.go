@@ -9,6 +9,8 @@ type DispatchWebhookEventsCommand struct {
 	LeaseDuration  time.Duration
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	RetryJitterBPS int
+	RetryBudget    int
 }
 
 type DispatchWebhookEventsOutput struct {

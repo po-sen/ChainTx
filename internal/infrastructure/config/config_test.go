@@ -84,6 +84,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.WebhookInitialBackoff <= 0 || cfg.WebhookMaxBackoff <= 0 {
 		t.Fatalf("expected positive webhook backoff defaults")
 	}
+	if cfg.WebhookRetryJitterBPS != 0 {
+		t.Fatalf("expected default webhook retry jitter bps 0, got %d", cfg.WebhookRetryJitterBPS)
+	}
+	if cfg.WebhookRetryBudget != 0 {
+		t.Fatalf("expected default webhook retry budget 0, got %d", cfg.WebhookRetryBudget)
+	}
 	if len(cfg.WebhookURLAllowList) == 0 {
 		t.Fatalf("expected default webhook allowlist")
 	}
@@ -620,6 +626,8 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS", "9")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS", "6")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS", "120")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS", "1800")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET", "4")
 
 	cfg, cfgErr := LoadConfig()
 	if cfgErr != nil {
@@ -661,6 +669,12 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	if cfg.WebhookMaxBackoff.Seconds() != 120 {
 		t.Fatalf("expected webhook max backoff 120s, got %s", cfg.WebhookMaxBackoff)
 	}
+	if cfg.WebhookRetryJitterBPS != 1800 {
+		t.Fatalf("expected webhook retry jitter bps 1800, got %d", cfg.WebhookRetryJitterBPS)
+	}
+	if cfg.WebhookRetryBudget != 4 {
+		t.Fatalf("expected webhook retry budget 4, got %d", cfg.WebhookRetryBudget)
+	}
 }
 
 func TestLoadConfigAllowsWebhookWithoutURLForNonDispatcherRuntime(t *testing.T) {
@@ -694,6 +708,36 @@ func TestLoadConfigRejectsWebhookMaxBackoffLessThanInitial(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_WEBHOOK_MAX_BACKOFF_INVALID" {
 		t.Fatalf("expected CONFIG_WEBHOOK_MAX_BACKOFF_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookRetryJitterBPS(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS", "10001")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_RETRY_JITTER_BPS_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_RETRY_JITTER_BPS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookRetryBudget(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET", "-1")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_RETRY_BUDGET_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_RETRY_BUDGET_INVALID, got %s", cfgErr.Code)
 	}
 }
 

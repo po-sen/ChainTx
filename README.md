@@ -236,6 +236,8 @@ make chain-down-all
 | `PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS`                   | No              | `8`                               | Max delivery attempts before terminal `failed` state                                                                                                                 |
 | `PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS`        | No              | `5`                               | Initial retry backoff in seconds                                                                                                                                     |
 | `PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS`            | No              | `300`                             | Max retry backoff in seconds (must be `>= initial`)                                                                                                                  |
+| `PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS`               | No              | `0`                               | Retry backoff jitter in bps (`0..10000`); `0` disables jitter                                                                                                        |
+| `PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET`                   | No              | `0`                               | Runtime retry budget per event (retry count, excluding initial attempt); `0` disables budget override                                                                |
 | `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No              | empty                             | BTC Esplora-compatible API base URL (must support `/address/{address}`; and when `BTC_MIN_CONFIRMATIONS>1`, also `/address/{address}/utxo` and `/blocks/tip/height`) |
 | `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No              | `{}`                              | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                        |
 | `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No              | `false`                           | Allow mainnet allocation in devtest mode                                                                                                                             |
@@ -353,6 +355,11 @@ Webhook 請求會帶以下 headers：
 4. 以 `Idempotency-Key`（即 `event_id`）做業務冪等，重送應回 `2xx` 並不可重複入帳。
 
 `webhook_url` 是建立 payment request 的必填欄位，且其 host 必須符合 `PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON`。`webhook-dispatcher` runtime 會強制檢查 `PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET`。
+
+重試調整參數：
+
+- `PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS`：`0..10000`，控制 retry backoff 抖動幅度（`0` 代表不抖動）。
+- `PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET`：每筆事件可用的 retry 次數上限（不含首次送出）；`0` 代表不啟用 runtime budget（只看 `max_attempts`）。
 
 若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
 

@@ -172,6 +172,8 @@ func BuildWebhookDispatcher(cfg config.Config, logger *log.Logger) (WebhookDispa
 		cfg.WebhookLeaseDuration,
 		cfg.WebhookInitialBackoff,
 		cfg.WebhookMaxBackoff,
+		cfg.WebhookRetryJitterBPS,
+		cfg.WebhookRetryBudget,
 		dispatchWebhookEventsUseCase,
 		logger,
 	)

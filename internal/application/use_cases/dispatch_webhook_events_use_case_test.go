@@ -26,6 +26,52 @@ func TestDispatchWebhookEventsUseCaseValidatesInput(t *testing.T) {
 	}
 }
 
+func TestDispatchWebhookEventsUseCaseRejectsInvalidRetryJitterBPS(t *testing.T) {
+	useCase := NewDispatchWebhookEventsUseCase(
+		&fakeWebhookOutboxRepository{},
+		&fakeWebhookEventGateway{},
+	)
+
+	_, appErr := useCase.Execute(context.Background(), dto.DispatchWebhookEventsCommand{
+		Now:            time.Now().UTC(),
+		BatchSize:      10,
+		WorkerID:       "webhook-worker-a",
+		LeaseDuration:  30 * time.Second,
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     60 * time.Second,
+		RetryJitterBPS: 10001,
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "dispatch_webhook_retry_jitter_bps_invalid" {
+		t.Fatalf("expected dispatch_webhook_retry_jitter_bps_invalid, got %s", appErr.Code)
+	}
+}
+
+func TestDispatchWebhookEventsUseCaseRejectsNegativeRetryBudget(t *testing.T) {
+	useCase := NewDispatchWebhookEventsUseCase(
+		&fakeWebhookOutboxRepository{},
+		&fakeWebhookEventGateway{},
+	)
+
+	_, appErr := useCase.Execute(context.Background(), dto.DispatchWebhookEventsCommand{
+		Now:            time.Now().UTC(),
+		BatchSize:      10,
+		WorkerID:       "webhook-worker-a",
+		LeaseDuration:  30 * time.Second,
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     60 * time.Second,
+		RetryBudget:    -1,
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "dispatch_webhook_retry_budget_invalid" {
+		t.Fatalf("expected dispatch_webhook_retry_budget_invalid, got %s", appErr.Code)
+	}
+}
+
 func TestDispatchWebhookEventsUseCaseMarksDeliveredOnSuccess(t *testing.T) {
 	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
 	repo := &fakeWebhookOutboxRepository{
@@ -150,6 +196,48 @@ func TestDispatchWebhookEventsUseCaseRetriesOnFailure(t *testing.T) {
 	}
 	if repo.retried[0].attempts != 1 {
 		t.Fatalf("expected attempts=1, got %+v", repo.retried[0])
+	}
+}
+
+func TestDispatchWebhookEventsUseCaseFailsWhenRetryBudgetReached(t *testing.T) {
+	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	repo := &fakeWebhookOutboxRepository{
+		claimed: []dto.PendingWebhookOutboxEvent{
+			{
+				ID:             20,
+				EventID:        "evt_20",
+				EventType:      "payment_request.status_changed",
+				DestinationURL: "https://hooks.example.com/evt_20",
+				Payload:        []byte(`{"event_id":"evt_20"}`),
+				Attempts:       2,
+				MaxAttempts:    8,
+			},
+		},
+	}
+	gateway := &fakeWebhookEventGateway{
+		results: map[string]dto.SendWebhookEventOutput{
+			"evt_20": {StatusCode: 500},
+		},
+	}
+	useCase := NewDispatchWebhookEventsUseCase(repo, gateway)
+
+	output, appErr := useCase.Execute(context.Background(), dto.DispatchWebhookEventsCommand{
+		Now:            now,
+		BatchSize:      10,
+		WorkerID:       "webhook-worker-a",
+		LeaseDuration:  30 * time.Second,
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     60 * time.Second,
+		RetryBudget:    2,
+	})
+	if appErr != nil {
+		t.Fatalf("expected no error, got %+v", appErr)
+	}
+	if output.Failed != 1 || output.Retried != 0 {
+		t.Fatalf("expected failed=1 retried=0, got %+v", output)
+	}
+	if len(repo.failed) != 1 || repo.failed[0].attempts != 3 {
+		t.Fatalf("expected failed attempts=3, got %+v", repo.failed)
 	}
 }
 
@@ -332,6 +420,38 @@ func TestDispatchWebhookEventsUseCaseRejectsLeaseTooSmallForHeartbeat(t *testing
 	}
 	if appErr.Code != "dispatch_webhook_lease_heartbeat_interval_invalid" {
 		t.Fatalf("expected dispatch_webhook_lease_heartbeat_interval_invalid, got %s", appErr.Code)
+	}
+}
+
+func TestWebhookRetryBackoffWithJitterDisabledMatchesBase(t *testing.T) {
+	base := webhookRetryBackoff(3, 5*time.Second, 60*time.Second)
+	jittered := webhookRetryBackoffWithJitter(
+		3,
+		5*time.Second,
+		60*time.Second,
+		0,
+		"evt_1",
+		1,
+	)
+	if jittered != base {
+		t.Fatalf("expected jitter disabled backoff %s, got %s", base, jittered)
+	}
+}
+
+func TestWebhookRetryBackoffWithJitterWithinBounds(t *testing.T) {
+	base := webhookRetryBackoff(3, 5*time.Second, 60*time.Second)
+	jittered := webhookRetryBackoffWithJitter(
+		3,
+		5*time.Second,
+		60*time.Second,
+		2000,
+		"evt_jitter",
+		99,
+	)
+	min := base * 80 / 100
+	max := base * 120 / 100
+	if jittered < min || jittered > max {
+		t.Fatalf("expected jittered backoff in [%s,%s], got %s", min, max, jittered)
 	}
 }
 

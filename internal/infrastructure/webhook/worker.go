@@ -17,6 +17,8 @@ type Worker struct {
 	leaseDuration  time.Duration
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	retryJitterBPS int
+	retryBudget    int
 	useCase        portsin.DispatchWebhookEventsUseCase
 	logger         *log.Logger
 }
@@ -29,6 +31,8 @@ func NewWorker(
 	leaseDuration time.Duration,
 	initialBackoff time.Duration,
 	maxBackoff time.Duration,
+	retryJitterBPS int,
+	retryBudget int,
 	useCase portsin.DispatchWebhookEventsUseCase,
 	logger *log.Logger,
 ) *Worker {
@@ -40,6 +44,8 @@ func NewWorker(
 		leaseDuration:  leaseDuration,
 		initialBackoff: initialBackoff,
 		maxBackoff:     maxBackoff,
+		retryJitterBPS: retryJitterBPS,
+		retryBudget:    retryBudget,
 		useCase:        useCase,
 		logger:         logger,
 	}
@@ -86,6 +92,8 @@ func (w *Worker) runCycle(ctx context.Context) {
 		LeaseDuration:  w.leaseDuration,
 		InitialBackoff: w.initialBackoff,
 		MaxBackoff:     w.maxBackoff,
+		RetryJitterBPS: w.retryJitterBPS,
+		RetryBudget:    w.retryBudget,
 	})
 	if appErr != nil {
 		w.logf(

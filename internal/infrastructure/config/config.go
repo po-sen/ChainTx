@@ -34,6 +34,8 @@ const (
 	defaultWebhookMaxAttempts       = 8
 	defaultWebhookInitialBackoff    = 5 * time.Second
 	defaultWebhookMaxBackoff        = 300 * time.Second
+	defaultWebhookRetryJitterBPS    = 0
+	defaultWebhookRetryBudget       = 0
 )
 
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
@@ -60,6 +62,8 @@ const webhookTimeoutSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_TIMEOUT_SECONDS"
 const webhookMaxAttemptsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS"
 const webhookInitialBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS"
 const webhookMaxBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS"
+const webhookRetryJitterBPSEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS"
+const webhookRetryBudgetEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET"
 const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
 const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
 
@@ -113,6 +117,8 @@ type Config struct {
 	WebhookMaxAttempts       int
 	WebhookInitialBackoff    time.Duration
 	WebhookMaxBackoff        time.Duration
+	WebhookRetryJitterBPS    int
+	WebhookRetryBudget       int
 	BTCExploraBaseURL        string
 	EVMRPCURLs               map[string]string
 	AddressSchemeAllowList   map[string]map[string]struct{}
@@ -257,6 +263,8 @@ func LoadConfig() (Config, *ConfigError) {
 		WebhookMaxAttempts:       webhookCfg.MaxAttempts,
 		WebhookInitialBackoff:    webhookCfg.InitialBackoff,
 		WebhookMaxBackoff:        webhookCfg.MaxBackoff,
+		WebhookRetryJitterBPS:    webhookCfg.RetryJitterBPS,
+		WebhookRetryBudget:       webhookCfg.RetryBudget,
 		BTCExploraBaseURL:        btcExploraBaseURL,
 		EVMRPCURLs:               evmRPCURLs,
 		AddressSchemeAllowList:   addressSchemeAllowList,
@@ -593,6 +601,8 @@ type webhookRuntimeConfig struct {
 	MaxAttempts    int
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	RetryJitterBPS int
+	RetryBudget    int
 }
 
 func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
@@ -811,6 +821,32 @@ func parseWebhookConfig() (webhookRuntimeConfig, *ConfigError) {
 		}
 	}
 
+	retryJitterBPS := defaultWebhookRetryJitterBPS
+	rawRetryJitterBPS := strings.TrimSpace(os.Getenv(webhookRetryJitterBPSEnv))
+	if rawRetryJitterBPS != "" {
+		parsed, err := strconv.Atoi(rawRetryJitterBPS)
+		if err != nil || parsed < 0 || parsed > 10000 {
+			return webhookRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_WEBHOOK_RETRY_JITTER_BPS_INVALID",
+				Message: webhookRetryJitterBPSEnv + " must be an integer between 0 and 10000",
+			}
+		}
+		retryJitterBPS = parsed
+	}
+
+	retryBudget := defaultWebhookRetryBudget
+	rawRetryBudget := strings.TrimSpace(os.Getenv(webhookRetryBudgetEnv))
+	if rawRetryBudget != "" {
+		parsed, err := strconv.Atoi(rawRetryBudget)
+		if err != nil || parsed < 0 {
+			return webhookRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_WEBHOOK_RETRY_BUDGET_INVALID",
+				Message: webhookRetryBudgetEnv + " must be a non-negative integer",
+			}
+		}
+		retryBudget = parsed
+	}
+
 	return webhookRuntimeConfig{
 		Enabled:        enabled,
 		HMACSecret:     hmacSecret,
@@ -821,6 +857,8 @@ func parseWebhookConfig() (webhookRuntimeConfig, *ConfigError) {
 		MaxAttempts:    maxAttempts,
 		InitialBackoff: initialBackoff,
 		MaxBackoff:     maxBackoff,
+		RetryJitterBPS: retryJitterBPS,
+		RetryBudget:    retryBudget,
 	}, nil
 }
 
