@@ -13,6 +13,11 @@ import (
 	apperrors "chaintx/internal/shared_kernel/errors"
 )
 
+var testWebhookAllowList = []string{
+	"hooks.example.com",
+	"*.partners.example.com",
+}
+
 func TestCreatePaymentRequestUseCaseExecuteSuccessWithDefaults(t *testing.T) {
 	readModel := fakeAssetCatalogReadModel{
 		entries: []dto.AssetCatalogEntry{
@@ -34,6 +39,9 @@ func TestCreatePaymentRequestUseCaseExecuteSuccessWithDefaults(t *testing.T) {
 		onCreate: func(command dto.CreatePaymentRequestPersistenceCommand) {
 			if command.Chain != "bitcoin" || command.Network != "mainnet" || command.Asset != "BTC" {
 				t.Fatalf("unexpected normalized tuple: %+v", command)
+			}
+			if command.WebhookURL != "https://hooks.example.com/events/payment" {
+				t.Fatalf("unexpected webhook url: %s", command.WebhookURL)
 			}
 			if command.IdempotencyScope.PrincipalID != "anonymous" {
 				t.Fatalf("expected default principal anonymous, got %q", command.IdempotencyScope.PrincipalID)
@@ -62,11 +70,12 @@ func TestCreatePaymentRequestUseCaseExecuteSuccessWithDefaults(t *testing.T) {
 		},
 	}
 
-	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, clock)
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, clock, testWebhookAllowList)
 	output, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
-		Chain:   "Bitcoin",
-		Network: "Mainnet",
-		Asset:   "btc",
+		Chain:      "Bitcoin",
+		Network:    "Mainnet",
+		Asset:      "btc",
+		WebhookURL: "https://hooks.example.com/events/payment",
 	})
 	if appErr != nil {
 		t.Fatalf("expected no error, got %+v", appErr)
@@ -88,12 +97,13 @@ func TestCreatePaymentRequestUseCaseExecuteUnsupportedAsset(t *testing.T) {
 		entries: []dto.AssetCatalogEntry{
 			{Chain: "bitcoin", Network: "mainnet", Asset: "BTC", DefaultExpiresInSeconds: 3600},
 		},
-	}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
+	}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()}, testWebhookAllowList)
 
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
-		Chain:   "bitcoin",
-		Network: "mainnet",
-		Asset:   "USDT",
+		Chain:      "bitcoin",
+		Network:    "mainnet",
+		Asset:      "USDT",
+		WebhookURL: "https://hooks.example.com/evt",
 	})
 	if appErr == nil {
 		t.Fatalf("expected unsupported asset error")
@@ -105,12 +115,13 @@ func TestCreatePaymentRequestUseCaseExecuteUnsupportedAsset(t *testing.T) {
 
 func TestCreatePaymentRequestUseCaseExecuteExpectedAmountValidation(t *testing.T) {
 	amount := "1.25"
-	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()}, testWebhookAllowList)
 
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
 		Chain:               "bitcoin",
 		Network:             "mainnet",
 		Asset:               "BTC",
+		WebhookURL:          "https://hooks.example.com/evt",
 		ExpectedAmountMinor: &amount,
 	})
 	if appErr == nil {
@@ -121,17 +132,71 @@ func TestCreatePaymentRequestUseCaseExecuteExpectedAmountValidation(t *testing.T
 	}
 }
 
+func TestCreatePaymentRequestUseCaseExecuteRequiresWebhookURL(t *testing.T) {
+	useCase := NewCreatePaymentRequestUseCase(
+		fakeAssetCatalogReadModel{
+			entries: []dto.AssetCatalogEntry{
+				{Chain: "bitcoin", Network: "mainnet", Asset: "BTC", DefaultExpiresInSeconds: 3600},
+			},
+		},
+		&fakePaymentRequestRepository{},
+		&fakeWalletAllocationGateway{},
+		fixedClock{now: time.Now().UTC()},
+		testWebhookAllowList,
+	)
+
+	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
+		Chain:   "bitcoin",
+		Network: "mainnet",
+		Asset:   "BTC",
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "invalid_request" {
+		t.Fatalf("expected invalid_request, got %s", appErr.Code)
+	}
+}
+
+func TestCreatePaymentRequestUseCaseExecuteRejectsNonAllowlistedWebhookURL(t *testing.T) {
+	useCase := NewCreatePaymentRequestUseCase(
+		fakeAssetCatalogReadModel{
+			entries: []dto.AssetCatalogEntry{
+				{Chain: "bitcoin", Network: "mainnet", Asset: "BTC", DefaultExpiresInSeconds: 3600},
+			},
+		},
+		&fakePaymentRequestRepository{},
+		&fakeWalletAllocationGateway{},
+		fixedClock{now: time.Now().UTC()},
+		testWebhookAllowList,
+	)
+
+	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
+		Chain:      "bitcoin",
+		Network:    "mainnet",
+		Asset:      "BTC",
+		WebhookURL: "https://evil.example.com/hook",
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "webhook_url_not_allowed" {
+		t.Fatalf("expected webhook_url_not_allowed, got %s", appErr.Code)
+	}
+}
+
 func TestCreatePaymentRequestUseCaseExecuteMetadataTooLarge(t *testing.T) {
-	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(fakeAssetCatalogReadModel{}, &fakePaymentRequestRepository{}, &fakeWalletAllocationGateway{}, fixedClock{now: time.Now().UTC()}, testWebhookAllowList)
 
 	metadata := map[string]any{
 		"blob": strings.Repeat("a", 5000),
 	}
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
-		Chain:    "bitcoin",
-		Network:  "mainnet",
-		Asset:    "BTC",
-		Metadata: metadata,
+		Chain:      "bitcoin",
+		Network:    "mainnet",
+		Asset:      "BTC",
+		WebhookURL: "https://hooks.example.com/evt",
+		Metadata:   metadata,
 	})
 	if appErr == nil {
 		t.Fatalf("expected validation error")
@@ -165,12 +230,13 @@ func TestCreatePaymentRequestUseCaseExecuteRejectsGatewayMetadataMismatch(t *tes
 			ChainID:       int64Ptr(1),
 		},
 	}
-	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()}, testWebhookAllowList)
 
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
-		Chain:   "ethereum",
-		Network: "sepolia",
-		Asset:   "ETH",
+		Chain:      "ethereum",
+		Network:    "sepolia",
+		Asset:      "ETH",
+		WebhookURL: "https://hooks.example.com/evt",
 	})
 	if appErr == nil {
 		t.Fatalf("expected invalid configuration error")
@@ -210,11 +276,12 @@ func TestCreatePaymentRequestUseCasePassesCatalogChainIDToGateway(t *testing.T) 
 		},
 	}
 
-	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()})
+	useCase := NewCreatePaymentRequestUseCase(readModel, repository, walletGateway, fixedClock{now: time.Now().UTC()}, testWebhookAllowList)
 	_, appErr := useCase.Execute(context.Background(), dto.CreatePaymentRequestCommand{
-		Chain:   "ethereum",
-		Network: "local",
-		Asset:   "ETH",
+		Chain:      "ethereum",
+		Network:    "local",
+		Asset:      "ETH",
+		WebhookURL: "https://hooks.example.com/evt",
 	})
 	if appErr != nil {
 		t.Fatalf("expected success, got %+v", appErr)
@@ -229,6 +296,7 @@ func TestHashCreateRequestDeterministicForEquivalentJSON(t *testing.T) {
 		Chain:            "bitcoin",
 		Network:          "mainnet",
 		Asset:            "BTC",
+		WebhookURL:       "https://hooks.example.com/evt",
 		ExpiresInSeconds: 3600,
 		Metadata: map[string]any{
 			"order": map[string]any{"id": "A1", "amount": "10"},
@@ -243,6 +311,7 @@ func TestHashCreateRequestDeterministicForEquivalentJSON(t *testing.T) {
 		Chain:            "bitcoin",
 		Network:          "mainnet",
 		Asset:            "BTC",
+		WebhookURL:       "https://hooks.example.com/evt",
 		ExpiresInSeconds: 3600,
 		Metadata: map[string]any{
 			"tags":  []any{"x", "y"},

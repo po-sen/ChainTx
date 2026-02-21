@@ -98,6 +98,7 @@ paths:
                   chain: bitcoin
                   network: mainnet
                   asset: BTC
+                  webhook_url: https://hooks.example.com/chaintx
                   expected_amount_minor: "150000"
                   expires_in_seconds: 3600
                   metadata:
@@ -107,6 +108,7 @@ paths:
                   chain: ethereum
                   network: mainnet
                   asset: ETH
+                  webhook_url: https://hooks.example.com/chaintx
                   expected_amount_minor: "10000000000000000"
                   metadata:
                     order_id: E1001
@@ -115,6 +117,7 @@ paths:
                   chain: ethereum
                   network: mainnet
                   asset: USDT
+                  webhook_url: https://hooks.example.com/chaintx
                   expected_amount_minor: "2500000"
                   metadata:
                     order_id: U2002
@@ -304,6 +307,7 @@ components:
         - chain
         - network
         - asset
+        - webhook_url
       properties:
         chain:
           type: string
@@ -314,6 +318,10 @@ components:
         asset:
           type: string
           example: BTC
+        webhook_url:
+          type: string
+          format: uri
+          example: https://hooks.example.com/chaintx
         expected_amount_minor:
           type: string
           pattern: '^[0-9]{1,78}$'

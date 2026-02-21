@@ -160,16 +160,97 @@ func (r *Repository) TransitionStatusIfCurrent(
 	metadata dto.ReconcileTransitionMetadata,
 ) (bool, *apperrors.AppError) {
 	const query = `
-UPDATE app.payment_requests
-SET
-  status = $3,
-  metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
-  updated_at = $5,
-  reconcile_lease_owner = NULL,
-  reconcile_lease_until = NULL
-WHERE id = $1
-  AND status = $2
-  AND (reconcile_lease_owner IS NULL OR reconcile_lease_owner = $6)
+WITH updated AS (
+  UPDATE app.payment_requests
+  SET
+    status = $3,
+    metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
+    updated_at = $5,
+    reconcile_lease_owner = NULL,
+    reconcile_lease_until = NULL
+  WHERE id = $1
+    AND status = $2
+    AND (reconcile_lease_owner IS NULL OR reconcile_lease_owner = $6)
+  RETURNING
+    id,
+    chain,
+    network,
+    asset,
+    expected_amount_minor::text,
+    webhook_url,
+    address_canonical,
+    expires_at
+),
+event_rows AS (
+  SELECT
+    u.id,
+    u.chain,
+    u.network,
+    u.asset,
+    u.expected_amount_minor,
+    u.webhook_url,
+    u.address_canonical,
+    u.expires_at,
+    ('evt_' || md5(random()::text || clock_timestamp()::text || u.id)) AS event_id
+  FROM updated AS u
+  WHERE $7 = TRUE
+    AND $3 IN ('detected', 'confirmed', 'expired')
+    AND NULLIF(btrim(u.webhook_url), '') IS NOT NULL
+),
+inserted_events AS (
+  INSERT INTO app.webhook_outbox_events (
+    event_id,
+    event_type,
+    payment_request_id,
+    destination_url,
+    payload,
+    delivery_status,
+    attempts,
+    max_attempts,
+    next_attempt_at,
+    created_at,
+    updated_at
+  )
+  SELECT
+    e.event_id,
+    'payment_request.status_changed',
+    e.id,
+    e.webhook_url,
+    jsonb_strip_nulls(
+      jsonb_build_object(
+        'event_id', e.event_id,
+        'event_type', 'payment_request.status_changed',
+        'occurred_at', $5,
+        'data',
+        jsonb_build_object(
+          'payment_request',
+          jsonb_strip_nulls(
+            jsonb_build_object(
+              'id', e.id,
+              'chain', e.chain,
+              'network', e.network,
+              'asset', e.asset,
+              'expected_amount_minor', e.expected_amount_minor,
+              'address_canonical', e.address_canonical,
+              'expires_at', e.expires_at,
+              'previous_status', $2,
+              'current_status', $3,
+              'observed_amount_minor', NULLIF($4::jsonb #>> '{reconciliation,observed_amount_minor}', ''),
+              'observation_source', NULLIF($4::jsonb #>> '{reconciliation,observation_source}', '')
+            )
+          )
+        )
+      )
+    ),
+    'pending',
+    0,
+    $8,
+    $5,
+    $5,
+    $5
+  FROM event_rows AS e
+)
+SELECT COUNT(*) FROM updated
 `
 
 	metadataPayload := map[string]any{}
@@ -190,7 +271,8 @@ WHERE id = $1
 		encodedMetadata = encoded
 	}
 
-	result, err := r.db.ExecContext(
+	var updatedCount int
+	err := r.db.QueryRowContext(
 		ctx,
 		query,
 		strings.TrimSpace(id),
@@ -199,7 +281,9 @@ WHERE id = $1
 		encodedMetadata,
 		updatedAt.UTC(),
 		strings.TrimSpace(leaseOwner),
-	)
+		r.webhookOutboxEnabled,
+		r.webhookMaxAttempts,
+	).Scan(&updatedCount)
 	if err != nil {
 		return false, apperrors.NewInternal(
 			"payment_request_update_failed",
@@ -208,14 +292,5 @@ WHERE id = $1
 		)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return false, apperrors.NewInternal(
-			"payment_request_update_failed",
-			"failed to verify payment request status transition",
-			map[string]any{"error": err.Error(), "id": id},
-		)
-	}
-
-	return rowsAffected == 1, nil
+	return updatedCount == 1, nil
 }

@@ -17,14 +17,35 @@ import (
 )
 
 type Repository struct {
-	db     *sql.DB
-	logger *log.Logger
+	db                   *sql.DB
+	logger               *log.Logger
+	webhookOutboxEnabled bool
+	webhookMaxAttempts   int
 }
 
 var _ portsout.PaymentRequestRepository = (*Repository)(nil)
 
 func NewRepository(db *sql.DB, logger *log.Logger) *Repository {
-	return &Repository{db: db, logger: logger}
+	return NewRepositoryWithConfig(db, logger, Config{})
+}
+
+type Config struct {
+	WebhookOutboxEnabled bool
+	WebhookMaxAttempts   int
+}
+
+func NewRepositoryWithConfig(db *sql.DB, logger *log.Logger, cfg Config) *Repository {
+	maxAttempts := cfg.WebhookMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 8
+	}
+
+	return &Repository{
+		db:                   db,
+		logger:               logger,
+		webhookOutboxEnabled: cfg.WebhookOutboxEnabled,
+		webhookMaxAttempts:   maxAttempts,
+	}
 }
 
 func (r *Repository) Create(
@@ -408,6 +429,7 @@ INSERT INTO app.payment_requests (
   chain,
   network,
   asset,
+  webhook_url,
   status,
   expected_amount_minor,
   address_canonical,
@@ -422,9 +444,9 @@ INSERT INTO app.payment_requests (
   created_at,
   updated_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7,
-  $8, $9, $10, $11, $12, $13, $14,
-  $15, $16, $17, $18
+  $1, $2, $3, $4, $5, $6, $7, $8,
+  $9, $10, $11, $12, $13, $14, $15,
+  $16, $17, $18, $19
 	)
 `
 
@@ -454,6 +476,7 @@ INSERT INTO app.payment_requests (
 		command.Chain,
 		command.Network,
 		command.Asset,
+		command.WebhookURL,
 		command.Status,
 		expectedAmount,
 		addressCanonical,

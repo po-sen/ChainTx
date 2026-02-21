@@ -17,6 +17,7 @@ type createRequestHashInput struct {
 	Chain               string
 	Network             string
 	Asset               string
+	WebhookURL          string
 	ExpectedAmountMinor *string
 	ExpiresInSeconds    int64
 	Metadata            map[string]any
@@ -27,6 +28,7 @@ func hashCreateRequest(input createRequestHashInput) (string, *apperrors.AppErro
 		"chain":              input.Chain,
 		"network":            input.Network,
 		"asset":              input.Asset,
+		"webhook_url":        input.WebhookURL,
 		"expires_in_seconds": input.ExpiresInSeconds,
 	}
 	if input.ExpectedAmountMinor != nil {

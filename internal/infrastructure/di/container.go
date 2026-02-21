@@ -15,21 +15,41 @@ import (
 	postgresqlbootstrap "chaintx/internal/adapters/outbound/persistence/postgresql/bootstrap"
 	postgresqlpaymentrequest "chaintx/internal/adapters/outbound/persistence/postgresql/paymentrequest"
 	postgresqlshared "chaintx/internal/adapters/outbound/persistence/postgresql/shared"
+	postgresqlwebhookoutbox "chaintx/internal/adapters/outbound/persistence/postgresql/webhookoutbox"
 	devtestwallet "chaintx/internal/adapters/outbound/wallet/devtest"
 	prodwallet "chaintx/internal/adapters/outbound/wallet/prod"
+	webhookhttp "chaintx/internal/adapters/outbound/webhook/http"
 	portsin "chaintx/internal/application/ports/in"
 	portsout "chaintx/internal/application/ports/out"
 	"chaintx/internal/application/use_cases"
 	"chaintx/internal/infrastructure/config"
 	"chaintx/internal/infrastructure/httpserver"
 	"chaintx/internal/infrastructure/reconciler"
+	"chaintx/internal/infrastructure/webhook"
 )
 
-type Container struct {
+type ServerContainer struct {
 	Database                     *sql.DB
 	Server                       *httpserver.Server
 	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
 	ReconcilerWorker             *reconciler.Worker
+}
+
+type ReconcilerContainer struct {
+	Database                     *sql.DB
+	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
+	ReconcilerWorker             *reconciler.Worker
+}
+
+type WebhookDispatcherContainer struct {
+	Database                     *sql.DB
+	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
+	WebhookWorker                *webhook.Worker
+}
+
+type runtimeDependencies struct {
+	databasePool                 *sql.DB
+	initializePersistenceUseCase portsin.InitializePersistenceUseCase
 }
 
 type WalletGatewayBuilder func(cfg config.Config, logger *log.Logger) portsout.WalletAllocationGateway
@@ -59,45 +79,21 @@ func RegisterWalletGatewayBuilder(mode string, builder WalletGatewayBuilder) {
 	walletGatewayBuilders[normalizedMode] = builder
 }
 
-func Build(cfg config.Config, logger *log.Logger) (Container, error) {
+func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error) {
+	runtimeDeps := buildRuntimeDependencies(cfg, logger)
+
 	walletGateway, buildErr := buildWalletGateway(cfg, logger)
 	if buildErr != nil {
-		return Container{}, buildErr
+		return ServerContainer{}, buildErr
 	}
 
 	healthUseCase := use_cases.NewGetHealthUseCase()
 	openAPIReadModel := docs.NewFileOpenAPISpecReadModel(cfg.OpenAPISpecPath)
 	openAPIUseCase := use_cases.NewGetOpenAPISpecUseCase(openAPIReadModel)
-	persistenceGateway := postgresqlbootstrap.NewGateway(
-		cfg.DatabaseURL,
-		cfg.DatabaseTarget,
-		cfg.MigrationsPath,
-		postgresqlbootstrap.ValidationRules{
-			AllocationMode:         cfg.AllocationMode,
-			DevtestAllowMainnet:    cfg.DevtestAllowMainnet,
-			DevtestKeysets:         cfg.DevtestKeysets,
-			DevtestKeysetPreflight: mapPreflightEntries(cfg.DevtestKeysetPreflights),
-			KeysetHashAlgorithm:    cfg.KeysetHashAlgorithm,
-			KeysetHashHMACSecret:   cfg.KeysetHashHMACSecret,
-			KeysetHashHMACLegacy:   cfg.KeysetHashHMACLegacyKeys,
-			AddressSchemeAllowList: cfg.AddressSchemeAllowList,
-		},
-		logger,
-	)
-	initializePersistenceUseCase := use_cases.NewInitializePersistenceUseCase(persistenceGateway)
-	databasePool := postgresqlshared.NewDatabasePool(cfg.DatabaseURL, logger)
-
-	assetCatalogReadModel := postgresqlassetcatalog.NewReadModel(databasePool)
-	paymentRequestRepository := postgresqlpaymentrequest.NewRepository(databasePool, logger)
-	paymentRequestReadModel := postgresqlpaymentrequest.NewReadModel(databasePool)
-	chainObserverGateway := chainobserverdevtest.NewGateway(chainobserverdevtest.Config{
-		BTCExploraBaseURL: cfg.BTCExploraBaseURL,
-		EVMRPCURLs:        cfg.EVMRPCURLs,
-		DetectedBPS:       cfg.ReconcilerDetectedBPS,
-		ConfirmedBPS:      cfg.ReconcilerConfirmedBPS,
-		BTCMinConf:        cfg.ReconcilerBTCMinConf,
-		EVMMinConf:        cfg.ReconcilerEVMMinConf,
-	})
+	assetCatalogReadModel := postgresqlassetcatalog.NewReadModel(runtimeDeps.databasePool)
+	paymentRequestRepository := newPaymentRequestRepository(runtimeDeps.databasePool, cfg, logger)
+	paymentRequestReadModel := postgresqlpaymentrequest.NewReadModel(runtimeDeps.databasePool)
+	chainObserverGateway := buildChainObserverGateway(cfg)
 
 	listAssetsUseCase := use_cases.NewListAssetsUseCase(assetCatalogReadModel)
 	createPaymentRequestUseCase := use_cases.NewCreatePaymentRequestUseCase(
@@ -105,21 +101,14 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 		paymentRequestRepository,
 		walletGateway,
 		use_cases.NewSystemClock(),
+		cfg.WebhookURLAllowList,
 	)
 	getPaymentRequestUseCase := use_cases.NewGetPaymentRequestUseCase(paymentRequestReadModel)
 	reconcilePaymentRequestsUseCase := use_cases.NewReconcilePaymentRequestsUseCase(
 		paymentRequestRepository,
 		chainObserverGateway,
 	)
-	reconcilerWorker := reconciler.NewWorker(
-		cfg.ReconcilerEnabled,
-		cfg.ReconcilerPollInterval,
-		cfg.ReconcilerBatchSize,
-		cfg.ReconcilerWorkerID,
-		cfg.ReconcilerLeaseDuration,
-		reconcilePaymentRequestsUseCase,
-		logger,
-	)
+	reconcilerWorker := buildReconcilerWorker(cfg, reconcilePaymentRequestsUseCase, logger)
 
 	healthController := controllers.NewHealthController(healthUseCase, logger)
 	swaggerController := controllers.NewSwaggerController(openAPIUseCase, logger)
@@ -139,12 +128,126 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 
 	server := httpserver.New(cfg.Address(), router, logger)
 
-	return Container{
-		Database:                     databasePool,
+	return ServerContainer{
+		Database:                     runtimeDeps.databasePool,
 		Server:                       server,
-		InitializePersistenceUseCase: initializePersistenceUseCase,
+		InitializePersistenceUseCase: runtimeDeps.initializePersistenceUseCase,
 		ReconcilerWorker:             reconcilerWorker,
 	}, nil
+}
+
+func BuildReconciler(cfg config.Config, logger *log.Logger) (ReconcilerContainer, error) {
+	runtimeDeps := buildRuntimeDependencies(cfg, logger)
+	paymentRequestRepository := newPaymentRequestRepository(runtimeDeps.databasePool, cfg, logger)
+	chainObserverGateway := buildChainObserverGateway(cfg)
+	reconcilePaymentRequestsUseCase := use_cases.NewReconcilePaymentRequestsUseCase(
+		paymentRequestRepository,
+		chainObserverGateway,
+	)
+	reconcilerWorker := buildReconcilerWorker(cfg, reconcilePaymentRequestsUseCase, logger)
+
+	return ReconcilerContainer{
+		Database:                     runtimeDeps.databasePool,
+		InitializePersistenceUseCase: runtimeDeps.initializePersistenceUseCase,
+		ReconcilerWorker:             reconcilerWorker,
+	}, nil
+}
+
+func BuildWebhookDispatcher(cfg config.Config, logger *log.Logger) (WebhookDispatcherContainer, error) {
+	runtimeDeps := buildRuntimeDependencies(cfg, logger)
+	webhookOutboxRepository := postgresqlwebhookoutbox.NewRepository(runtimeDeps.databasePool)
+	webhookEventGateway := webhookhttp.NewGateway(webhookhttp.Config{
+		HMACSecret: cfg.WebhookHMACSecret,
+		Timeout:    cfg.WebhookTimeout,
+	})
+	dispatchWebhookEventsUseCase := use_cases.NewDispatchWebhookEventsUseCase(
+		webhookOutboxRepository,
+		webhookEventGateway,
+	)
+	webhookWorker := webhook.NewWorker(
+		cfg.WebhookEnabled,
+		cfg.WebhookPollInterval,
+		cfg.WebhookBatchSize,
+		cfg.WebhookWorkerID,
+		cfg.WebhookLeaseDuration,
+		cfg.WebhookInitialBackoff,
+		cfg.WebhookMaxBackoff,
+		dispatchWebhookEventsUseCase,
+		logger,
+	)
+
+	return WebhookDispatcherContainer{
+		Database:                     runtimeDeps.databasePool,
+		InitializePersistenceUseCase: runtimeDeps.initializePersistenceUseCase,
+		WebhookWorker:                webhookWorker,
+	}, nil
+}
+
+func buildRuntimeDependencies(cfg config.Config, logger *log.Logger) runtimeDependencies {
+	persistenceGateway := postgresqlbootstrap.NewGateway(
+		cfg.DatabaseURL,
+		cfg.DatabaseTarget,
+		cfg.MigrationsPath,
+		postgresqlbootstrap.ValidationRules{
+			AllocationMode:         cfg.AllocationMode,
+			DevtestAllowMainnet:    cfg.DevtestAllowMainnet,
+			DevtestKeysets:         cfg.DevtestKeysets,
+			DevtestKeysetPreflight: mapPreflightEntries(cfg.DevtestKeysetPreflights),
+			KeysetHashAlgorithm:    cfg.KeysetHashAlgorithm,
+			KeysetHashHMACSecret:   cfg.KeysetHashHMACSecret,
+			KeysetHashHMACLegacy:   cfg.KeysetHashHMACLegacyKeys,
+			AddressSchemeAllowList: cfg.AddressSchemeAllowList,
+		},
+		logger,
+	)
+	initializePersistenceUseCase := use_cases.NewInitializePersistenceUseCase(persistenceGateway)
+	databasePool := postgresqlshared.NewDatabasePool(cfg.DatabaseURL, logger)
+	return runtimeDependencies{
+		databasePool:                 databasePool,
+		initializePersistenceUseCase: initializePersistenceUseCase,
+	}
+}
+
+func buildChainObserverGateway(cfg config.Config) portsout.PaymentChainObserverGateway {
+	return chainobserverdevtest.NewGateway(chainobserverdevtest.Config{
+		BTCExploraBaseURL: cfg.BTCExploraBaseURL,
+		EVMRPCURLs:        cfg.EVMRPCURLs,
+		DetectedBPS:       cfg.ReconcilerDetectedBPS,
+		ConfirmedBPS:      cfg.ReconcilerConfirmedBPS,
+		BTCMinConf:        cfg.ReconcilerBTCMinConf,
+		EVMMinConf:        cfg.ReconcilerEVMMinConf,
+	})
+}
+
+func newPaymentRequestRepository(
+	db *sql.DB,
+	cfg config.Config,
+	logger *log.Logger,
+) *postgresqlpaymentrequest.Repository {
+	return postgresqlpaymentrequest.NewRepositoryWithConfig(
+		db,
+		logger,
+		postgresqlpaymentrequest.Config{
+			WebhookOutboxEnabled: cfg.WebhookEnabled,
+			WebhookMaxAttempts:   cfg.WebhookMaxAttempts,
+		},
+	)
+}
+
+func buildReconcilerWorker(
+	cfg config.Config,
+	useCase portsin.ReconcilePaymentRequestsUseCase,
+	logger *log.Logger,
+) *reconciler.Worker {
+	return reconciler.NewWorker(
+		cfg.ReconcilerEnabled,
+		cfg.ReconcilerPollInterval,
+		cfg.ReconcilerBatchSize,
+		cfg.ReconcilerWorkerID,
+		cfg.ReconcilerLeaseDuration,
+		useCase,
+		logger,
+	)
 }
 
 func mapPreflightEntries(entries []config.DevtestKeysetPreflightEntry) []postgresqlbootstrap.DevtestKeysetPreflightEntry {

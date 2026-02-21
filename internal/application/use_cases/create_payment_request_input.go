@@ -28,6 +28,7 @@ type normalizedCreatePaymentRequestInput struct {
 	Chain               string
 	Network             string
 	Asset               string
+	WebhookURL          string
 	ExpectedAmountMinor *string
 	ExpiresInSeconds    *int64
 	Metadata            map[string]any
@@ -59,6 +60,13 @@ func (u *createPaymentRequestUseCase) validateDependencies() *apperrors.AppError
 			nil,
 		)
 	}
+	if len(u.webhookURLAllowList) == 0 {
+		return apperrors.NewInternal(
+			"webhook_url_allowlist_missing",
+			"webhook url allowlist is required",
+			nil,
+		)
+	}
 
 	return nil
 }
@@ -77,6 +85,17 @@ func (u *createPaymentRequestUseCase) normalizeCommand(command dto.CreatePayment
 	asset, appErr := valueobjects.NormalizeAsset(command.Asset)
 	if appErr != nil {
 		return normalizedCreatePaymentRequestInput{}, appErr
+	}
+	webhookURL, webhookHost, appErr := valueobjects.NormalizeWebhookURL(command.WebhookURL)
+	if appErr != nil {
+		return normalizedCreatePaymentRequestInput{}, appErr
+	}
+	if !valueobjects.IsWebhookHostAllowed(webhookHost, u.webhookURLAllowList) {
+		return normalizedCreatePaymentRequestInput{}, apperrors.NewValidation(
+			"webhook_url_not_allowed",
+			"webhook_url host is not allowlisted",
+			map[string]any{"field": "webhook_url"},
+		)
 	}
 
 	var expectedAmountMinor *string
@@ -106,6 +125,7 @@ func (u *createPaymentRequestUseCase) normalizeCommand(command dto.CreatePayment
 		Chain:               chain,
 		Network:             network,
 		Asset:               asset,
+		WebhookURL:          webhookURL,
 		ExpectedAmountMinor: expectedAmountMinor,
 		ExpiresInSeconds:    command.ExpiresInSeconds,
 		Metadata:            metadata,
@@ -145,6 +165,7 @@ func (u *createPaymentRequestUseCase) buildPersistenceCommand(
 		Chain:               input.Chain,
 		Network:             input.Network,
 		Asset:               input.Asset,
+		WebhookURL:          input.WebhookURL,
 		ExpectedAmountMinor: input.ExpectedAmountMinor,
 		ExpiresInSeconds:    resolvedExpiresInSeconds,
 		Metadata:            input.Metadata,
@@ -169,6 +190,7 @@ func (u *createPaymentRequestUseCase) buildPersistenceCommand(
 		Chain:                input.Chain,
 		Network:              input.Network,
 		Asset:                input.Asset,
+		WebhookURL:           input.WebhookURL,
 		ExpectedAmountMinor:  input.ExpectedAmountMinor,
 		Metadata:             input.Metadata,
 		ExpiresAt:            expiresAt,

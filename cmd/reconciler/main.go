@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	container, buildErr := di.Build(cfg, logger)
+	container, buildErr := di.BuildReconciler(cfg, logger)
 	if buildErr != nil {
 		logger.Printf("dependency wiring error: %v", buildErr)
 		os.Exit(1)

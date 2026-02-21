@@ -575,6 +575,7 @@ func newCreatePersistenceCommand(
 		Chain:                catalog.Chain,
 		Network:              catalog.Network,
 		Asset:                catalog.Asset,
+		WebhookURL:           "https://hooks.example.com/integration",
 		Metadata:             map[string]any{"test": "integration"},
 		ExpiresAt:            createdAt.Add(integrationRequestTTL),
 		IdempotencyExpiresAt: createdAt.Add(integrationIdempotencyTTL),

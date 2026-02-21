@@ -24,7 +24,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestCreated(t *testing.T) {
 		log.New(io.Discard, "", 0),
 	)
 
-	body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC"}`)
+	body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC","webhook_url":"https://hooks.example.com/evt"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payment-requests", body)
 	rec := httptest.NewRecorder()
 
@@ -45,7 +45,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestReplayed(t *testing.T) {
 		log.New(io.Discard, "", 0),
 	)
 
-	body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC"}`)
+	body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC","webhook_url":"https://hooks.example.com/evt"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/payment-requests", body)
 	rec := httptest.NewRecorder()
 
@@ -81,6 +81,30 @@ func TestPaymentRequestsControllerCreatePaymentRequestInvalidJSON(t *testing.T) 
 	}
 	if _, ok := payload["error"]; !ok {
 		t.Fatalf("expected error envelope in response: %v", payload)
+	}
+}
+
+func TestPaymentRequestsControllerCreatePaymentRequestMissingWebhookURL(t *testing.T) {
+	controller := NewPaymentRequestsController(
+		stubCreateUseCase{replayed: false},
+		stubGetUseCase{},
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/payment-requests",
+		bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	controller.CreatePaymentRequest(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"webhook_url is required"`)) {
+		t.Fatalf("expected webhook_url validation error, got %s", rec.Body.String())
 	}
 }
 

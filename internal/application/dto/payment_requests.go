@@ -19,6 +19,7 @@ type CreatePaymentRequestCommand struct {
 	Chain               string
 	Network             string
 	Asset               string
+	WebhookURL          string
 	ExpectedAmountMinor *string
 	ExpiresInSeconds    *int64
 	Metadata            map[string]any
@@ -39,6 +40,7 @@ type CreatePaymentRequestPersistenceCommand struct {
 	Chain                string
 	Network              string
 	Asset                string
+	WebhookURL           string
 	ExpectedAmountMinor  *string
 	Metadata             map[string]any
 	ExpiresAt            time.Time

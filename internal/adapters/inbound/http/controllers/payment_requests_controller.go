@@ -28,6 +28,7 @@ type createPaymentRequestPayload struct {
 	Chain               string         `json:"chain"`
 	Network             string         `json:"network"`
 	Asset               string         `json:"asset"`
+	WebhookURL          string         `json:"webhook_url"`
 	ExpectedAmountMinor *string        `json:"expected_amount_minor,omitempty"`
 	ExpiresInSeconds    *int64         `json:"expires_in_seconds,omitempty"`
 	Metadata            map[string]any `json:"metadata,omitempty"`
@@ -62,6 +63,7 @@ func (c *PaymentRequestsController) CreatePaymentRequest(w http.ResponseWriter, 
 		Chain:               payload.Chain,
 		Network:             payload.Network,
 		Asset:               payload.Asset,
+		WebhookURL:          payload.WebhookURL,
 		ExpectedAmountMinor: payload.ExpectedAmountMinor,
 		ExpiresInSeconds:    payload.ExpiresInSeconds,
 		Metadata:            payload.Metadata,
@@ -119,6 +121,14 @@ func parseCreatePaymentRequestPayload(body io.Reader) (createPaymentRequestPaylo
 
 	if payload.Metadata == nil {
 		payload.Metadata = map[string]any{}
+	}
+	payload.WebhookURL = strings.TrimSpace(payload.WebhookURL)
+	if payload.WebhookURL == "" {
+		return createPaymentRequestPayload{}, apperrors.NewValidation(
+			"invalid_request",
+			"webhook_url is required",
+			map[string]any{"field": "webhook_url"},
+		)
 	}
 
 	return payload, nil

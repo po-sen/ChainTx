@@ -103,7 +103,7 @@ func TestRouterHealthAndSwaggerRoutes(t *testing.T) {
 	})
 
 	t.Run("create payment request route returns 201", func(t *testing.T) {
-		body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC"}`)
+		body := bytes.NewBufferString(`{"chain":"bitcoin","network":"mainnet","asset":"BTC","webhook_url":"https://hooks.example.com/evt"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/payment-requests", body)
 		rec := httptest.NewRecorder()
 

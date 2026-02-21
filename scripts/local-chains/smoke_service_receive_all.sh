@@ -24,6 +24,7 @@ ETH_SENDER_PRIVATE_KEY="${ETH_SENDER_PRIVATE_KEY:-$ANVIL_DEFAULT_PRIVATE_KEY}"
 ETH_SEND_AMOUNT_WEI="${ETH_SEND_AMOUNT_WEI:-1000000000000000}"
 
 USDT_SEND_AMOUNT_MINOR="${USDT_SEND_AMOUNT_MINOR:-1000000}"
+PAYMENT_REQUEST_WEBHOOK_URL="${PAYMENT_REQUEST_WEBHOOK_URL:-http://localhost:18080/chaintx/webhook}"
 
 ERC20_TRANSFER_TOPIC0="0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
@@ -105,11 +106,13 @@ create_payment_request() {
         --arg chain "$chain" \
         --arg network "$network" \
         --arg asset "$asset" \
+        --arg webhook_url "$PAYMENT_REQUEST_WEBHOOK_URL" \
         --arg expected "$expected_minor" \
         '{
           chain: $chain,
           network: $network,
           asset: $asset,
+          webhook_url: $webhook_url,
           expected_amount_minor: $expected
         }'
     )"

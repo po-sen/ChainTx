@@ -25,7 +25,7 @@ func main() {
 		cfg.DevtestAllowMainnet,
 	)
 
-	container, buildErr := di.Build(cfg, logger)
+	container, buildErr := di.BuildServer(cfg, logger)
 	if buildErr != nil {
 		logger.Printf("dependency wiring error: %v", buildErr)
 		os.Exit(1)

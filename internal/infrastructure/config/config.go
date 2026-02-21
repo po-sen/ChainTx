@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	valueobjects "chaintx/internal/domain/value_objects"
 )
 
 const (
@@ -25,6 +27,13 @@ const (
 	defaultConfirmedThresholdBPS    = 10000
 	defaultBTCMinConfirmations      = 1
 	defaultEVMMinConfirmations      = 1
+	defaultWebhookPollInterval      = 10 * time.Second
+	defaultWebhookBatchSize         = 100
+	defaultWebhookLeaseDuration     = 30 * time.Second
+	defaultWebhookTimeout           = 5 * time.Second
+	defaultWebhookMaxAttempts       = 8
+	defaultWebhookInitialBackoff    = 5 * time.Second
+	defaultWebhookMaxBackoff        = 300 * time.Second
 )
 
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
@@ -40,6 +49,17 @@ const reconcilerDetectedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_DETECTED_T
 const reconcilerConfirmedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS"
 const reconcilerBTCMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS"
 const reconcilerEVMMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS"
+const webhookEnabledEnv = "PAYMENT_REQUEST_WEBHOOK_ENABLED"
+const webhookURLAllowListEnv = "PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON"
+const webhookHMACSecretEnv = "PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET"
+const webhookPollIntervalEnv = "PAYMENT_REQUEST_WEBHOOK_POLL_INTERVAL_SECONDS"
+const webhookBatchSizeEnv = "PAYMENT_REQUEST_WEBHOOK_BATCH_SIZE"
+const webhookLeaseSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_LEASE_SECONDS"
+const webhookWorkerIDEnv = "PAYMENT_REQUEST_WEBHOOK_WORKER_ID"
+const webhookTimeoutSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_TIMEOUT_SECONDS"
+const webhookMaxAttemptsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS"
+const webhookInitialBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS"
+const webhookMaxBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS"
 const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
 const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
 
@@ -82,6 +102,17 @@ type Config struct {
 	ReconcilerConfirmedBPS   int
 	ReconcilerBTCMinConf     int
 	ReconcilerEVMMinConf     int
+	WebhookEnabled           bool
+	WebhookURLAllowList      []string
+	WebhookHMACSecret        string
+	WebhookPollInterval      time.Duration
+	WebhookBatchSize         int
+	WebhookLeaseDuration     time.Duration
+	WebhookWorkerID          string
+	WebhookTimeout           time.Duration
+	WebhookMaxAttempts       int
+	WebhookInitialBackoff    time.Duration
+	WebhookMaxBackoff        time.Duration
 	BTCExploraBaseURL        string
 	EVMRPCURLs               map[string]string
 	AddressSchemeAllowList   map[string]map[string]struct{}
@@ -157,9 +188,21 @@ func LoadConfig() (Config, *ConfigError) {
 	if reconcilerErr != nil {
 		return Config{}, reconcilerErr
 	}
+	webhookCfg, webhookErr := parseWebhookConfig()
+	if webhookErr != nil {
+		return Config{}, webhookErr
+	}
+	webhookAllowList, webhookAllowListErr := parseWebhookURLAllowList()
+	if webhookAllowListErr != nil {
+		return Config{}, webhookAllowListErr
+	}
 	reconcilerWorkerID := strings.TrimSpace(os.Getenv(reconcilerWorkerIDEnv))
 	if reconcilerWorkerID == "" {
-		reconcilerWorkerID = defaultReconcilerWorkerID()
+		reconcilerWorkerID = defaultRuntimeWorkerID()
+	}
+	webhookWorkerID := strings.TrimSpace(os.Getenv(webhookWorkerIDEnv))
+	if webhookWorkerID == "" {
+		webhookWorkerID = defaultRuntimeWorkerID()
 	}
 	btcExploraBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv(btcExploraBaseURLEnv)), "/")
 	evmRPCURLs, evmRPCURLsErr := parseEVMRPCURLs(strings.TrimSpace(os.Getenv(evmRPCURLsEnv)))
@@ -203,6 +246,17 @@ func LoadConfig() (Config, *ConfigError) {
 		ReconcilerConfirmedBPS:   reconcilerCfg.ConfirmedBPS,
 		ReconcilerBTCMinConf:     reconcilerCfg.BTCMinConfirmations,
 		ReconcilerEVMMinConf:     reconcilerCfg.EVMMinConfirmations,
+		WebhookEnabled:           webhookCfg.Enabled,
+		WebhookURLAllowList:      webhookAllowList,
+		WebhookHMACSecret:        webhookCfg.HMACSecret,
+		WebhookPollInterval:      webhookCfg.PollInterval,
+		WebhookBatchSize:         webhookCfg.BatchSize,
+		WebhookLeaseDuration:     webhookCfg.LeaseDuration,
+		WebhookWorkerID:          webhookWorkerID,
+		WebhookTimeout:           webhookCfg.Timeout,
+		WebhookMaxAttempts:       webhookCfg.MaxAttempts,
+		WebhookInitialBackoff:    webhookCfg.InitialBackoff,
+		WebhookMaxBackoff:        webhookCfg.MaxBackoff,
 		BTCExploraBaseURL:        btcExploraBaseURL,
 		EVMRPCURLs:               evmRPCURLs,
 		AddressSchemeAllowList:   addressSchemeAllowList,
@@ -529,6 +583,18 @@ type reconcilerRuntimeConfig struct {
 	EVMMinConfirmations int
 }
 
+type webhookRuntimeConfig struct {
+	Enabled        bool
+	HMACSecret     string
+	PollInterval   time.Duration
+	BatchSize      int
+	LeaseDuration  time.Duration
+	Timeout        time.Duration
+	MaxAttempts    int
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+}
+
 func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
 	enabled := false
 	rawEnabled := strings.TrimSpace(os.Getenv(reconcilerEnabledEnv))
@@ -659,7 +725,151 @@ func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
 	}, nil
 }
 
-func defaultReconcilerWorkerID() string {
+func parseWebhookConfig() (webhookRuntimeConfig, *ConfigError) {
+	enabled := false
+	rawEnabled := strings.TrimSpace(os.Getenv(webhookEnabledEnv))
+	if rawEnabled != "" {
+		parsed, err := strconv.ParseBool(rawEnabled)
+		if err != nil {
+			return webhookRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_WEBHOOK_ENABLED_INVALID",
+				Message: webhookEnabledEnv + " must be a boolean",
+			}
+		}
+		enabled = parsed
+	}
+
+	hmacSecret := strings.TrimSpace(os.Getenv(webhookHMACSecretEnv))
+
+	pollInterval, pollErr := parsePositiveSeconds(
+		webhookPollIntervalEnv,
+		"CONFIG_WEBHOOK_POLL_INTERVAL_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookPollInterval,
+	)
+	if pollErr != nil {
+		return webhookRuntimeConfig{}, pollErr
+	}
+	batchSize, batchErr := parsePositiveInt(
+		webhookBatchSizeEnv,
+		"CONFIG_WEBHOOK_BATCH_SIZE_INVALID",
+		" must be a positive integer",
+		defaultWebhookBatchSize,
+	)
+	if batchErr != nil {
+		return webhookRuntimeConfig{}, batchErr
+	}
+	leaseDuration, leaseErr := parsePositiveSeconds(
+		webhookLeaseSecondsEnv,
+		"CONFIG_WEBHOOK_LEASE_SECONDS_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookLeaseDuration,
+	)
+	if leaseErr != nil {
+		return webhookRuntimeConfig{}, leaseErr
+	}
+	timeout, timeoutErr := parsePositiveSeconds(
+		webhookTimeoutSecondsEnv,
+		"CONFIG_WEBHOOK_TIMEOUT_SECONDS_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookTimeout,
+	)
+	if timeoutErr != nil {
+		return webhookRuntimeConfig{}, timeoutErr
+	}
+	maxAttempts, maxAttemptsErr := parsePositiveInt(
+		webhookMaxAttemptsEnv,
+		"CONFIG_WEBHOOK_MAX_ATTEMPTS_INVALID",
+		" must be a positive integer",
+		defaultWebhookMaxAttempts,
+	)
+	if maxAttemptsErr != nil {
+		return webhookRuntimeConfig{}, maxAttemptsErr
+	}
+	initialBackoff, initialBackoffErr := parsePositiveSeconds(
+		webhookInitialBackoffSecondsEnv,
+		"CONFIG_WEBHOOK_INITIAL_BACKOFF_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookInitialBackoff,
+	)
+	if initialBackoffErr != nil {
+		return webhookRuntimeConfig{}, initialBackoffErr
+	}
+	maxBackoff, maxBackoffErr := parsePositiveSeconds(
+		webhookMaxBackoffSecondsEnv,
+		"CONFIG_WEBHOOK_MAX_BACKOFF_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookMaxBackoff,
+	)
+	if maxBackoffErr != nil {
+		return webhookRuntimeConfig{}, maxBackoffErr
+	}
+	if maxBackoff < initialBackoff {
+		return webhookRuntimeConfig{}, &ConfigError{
+			Code:    "CONFIG_WEBHOOK_MAX_BACKOFF_INVALID",
+			Message: webhookMaxBackoffSecondsEnv + " must be >= " + webhookInitialBackoffSecondsEnv,
+		}
+	}
+
+	return webhookRuntimeConfig{
+		Enabled:        enabled,
+		HMACSecret:     hmacSecret,
+		PollInterval:   pollInterval,
+		BatchSize:      batchSize,
+		LeaseDuration:  leaseDuration,
+		Timeout:        timeout,
+		MaxAttempts:    maxAttempts,
+		InitialBackoff: initialBackoff,
+		MaxBackoff:     maxBackoff,
+	}, nil
+}
+
+func parseWebhookURLAllowList() ([]string, *ConfigError) {
+	raw := strings.TrimSpace(os.Getenv(webhookURLAllowListEnv))
+	if raw == "" {
+		return defaultWebhookURLAllowList(), nil
+	}
+
+	decoded := []string{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, &ConfigError{
+			Code:    "CONFIG_WEBHOOK_URL_ALLOWLIST_INVALID",
+			Message: webhookURLAllowListEnv + " must be a JSON array of host patterns",
+		}
+	}
+
+	seen := map[string]struct{}{}
+	allowlist := make([]string, 0, len(decoded))
+	for _, pattern := range decoded {
+		normalizedPattern, appErr := valueobjects.NormalizeWebhookHostPattern(pattern)
+		if appErr != nil {
+			return nil, &ConfigError{
+				Code:    "CONFIG_WEBHOOK_URL_ALLOWLIST_INVALID",
+				Message: webhookURLAllowListEnv + " must contain valid host patterns",
+			}
+		}
+		if _, exists := seen[normalizedPattern]; exists {
+			continue
+		}
+		seen[normalizedPattern] = struct{}{}
+		allowlist = append(allowlist, normalizedPattern)
+	}
+
+	if len(allowlist) == 0 {
+		return nil, &ConfigError{
+			Code:    "CONFIG_WEBHOOK_URL_ALLOWLIST_INVALID",
+			Message: webhookURLAllowListEnv + " must contain at least one host pattern",
+		}
+	}
+
+	return allowlist, nil
+}
+
+func defaultWebhookURLAllowList() []string {
+	return []string{"localhost", "127.0.0.1", "::1"}
+}
+
+func defaultRuntimeWorkerID() string {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -669,6 +879,48 @@ func defaultReconcilerWorkerID() string {
 		hostname = "unknown"
 	}
 	return hostname + ":" + strconv.Itoa(os.Getpid())
+}
+
+func parsePositiveInt(
+	envKey string,
+	errorCode string,
+	messageSuffix string,
+	defaultValue int,
+) (int, *ConfigError) {
+	value := defaultValue
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return value, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 0, &ConfigError{
+			Code:    errorCode,
+			Message: envKey + messageSuffix,
+		}
+	}
+	return parsed, nil
+}
+
+func parsePositiveSeconds(
+	envKey string,
+	errorCode string,
+	messageSuffix string,
+	defaultValue time.Duration,
+) (time.Duration, *ConfigError) {
+	value := defaultValue
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return value, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 0, &ConfigError{
+			Code:    errorCode,
+			Message: envKey + messageSuffix,
+		}
+	}
+	return time.Duration(parsed) * time.Second, nil
 }
 
 func parseEVMRPCURLs(raw string) (map[string]string, *ConfigError) {

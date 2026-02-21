@@ -16,6 +16,7 @@ type createPaymentRequestUseCase struct {
 	repository            portsout.PaymentRequestRepository
 	walletGateway         portsout.WalletAllocationGateway
 	allocationMode        string
+	webhookURLAllowList   []string
 	clock                 Clock
 }
 
@@ -24,6 +25,7 @@ func NewCreatePaymentRequestUseCase(
 	repository portsout.PaymentRequestRepository,
 	walletGateway portsout.WalletAllocationGateway,
 	clock Clock,
+	webhookURLAllowList []string,
 ) portsin.CreatePaymentRequestUseCase {
 	if clock == nil {
 		clock = NewSystemClock()
@@ -34,6 +36,7 @@ func NewCreatePaymentRequestUseCase(
 		repository:            repository,
 		walletGateway:         walletGateway,
 		allocationMode:        detectAllocationMode(walletGateway),
+		webhookURLAllowList:   webhookURLAllowList,
 		clock:                 clock,
 	}
 }

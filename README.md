@@ -45,6 +45,16 @@ make service-up \
   SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
 ```
 
+若要啟用「獨立 webhook-dispatcher container」並水平擴展：
+
+```bash
+make service-up \
+  SERVICE_WEBHOOK_ENABLED=true \
+  SERVICE_WEBHOOK_DISPATCHER_REPLICAS=2 \
+  SERVICE_WEBHOOK_URL_ALLOWLIST_JSON='["your-receiver.example"]' \
+  SERVICE_WEBHOOK_HMAC_SECRET='replace-with-strong-secret'
+```
+
 ## Local Chain Simulation (new workflow)
 
 此模式提供獨立 rail stacks，遵守以下固定常數：
@@ -96,7 +106,7 @@ make local-up
 
 `ethereum/sepolia` rows 仍保留，不會被 local sync 覆蓋。
 
-此外，服務有選配的 chain reconciler（預設關閉）。目前建議部署模式是獨立 `reconciler` service（不是跟 `app` 同 process），開啟後會定期輪詢 open payment requests，將狀態從 `pending` 推進到 `detected` / `confirmed`，以及在到期後更新成 `expired`。
+此外，服務有選配的 chain reconciler（預設關閉）。目前建議部署模式是獨立 `reconciler` service（不是跟 `app` 同 process），開啟後會定期輪詢 open payment requests，將狀態從 `pending` 推進到 `detected` / `confirmed`，以及在到期後更新成 `expired`。Webhook dispatcher 也採獨立 `webhook-dispatcher` service；`app` 與 `reconciler` process 不會啟動 webhook worker。
 
 全量 profile（需要 ETH + USDT 測試時）：
 
@@ -197,28 +207,39 @@ make chain-down-all
 
 ## Configuration
 
-| Variable                                                 | Required     | Default            | Description                                                                                                                                                          |
-| -------------------------------------------------------- | ------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                           | Yes          | none               | PostgreSQL DSN                                                                                                                                                       |
-| `PORT`                                                   | No           | `8080`             | HTTP listen port                                                                                                                                                     |
-| `OPENAPI_SPEC_PATH`                                      | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                    |
-| `PAYMENT_REQUEST_ALLOCATION_MODE`                        | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                           |
-| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported)     |
-| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                               |
-| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No           | `[]`               | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                               |
-| `PAYMENT_REQUEST_RECONCILER_ENABLED`                     | No           | `false`            | Enable background chain reconciler worker                                                                                                                            |
-| `PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS`       | No           | `15`               | Reconciler polling interval in seconds                                                                                                                               |
-| `PAYMENT_REQUEST_RECONCILER_BATCH_SIZE`                  | No           | `100`              | Max open payment requests processed per cycle                                                                                                                        |
-| `PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS`               | No           | `30`               | Lease duration for claimed open requests (used for multi-replica work partition and crash recovery)                                                                  |
-| `PAYMENT_REQUEST_RECONCILER_WORKER_ID`                   | No           | hostname+pid       | Optional worker identity override; default is generated from runtime host/process                                                                                    |
-| `PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS`      | No           | `10000`            | Detected threshold in bps (1-10000), must be `<= PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`                                                                 |
-| `PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`     | No           | `10000`            | Confirmed threshold in bps (1-10000)                                                                                                                                 |
-| `PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS`       | No           | `1`                | Minimum BTC confirmations required before counting amount toward `confirmed`                                                                                         |
-| `PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS`       | No           | `1`                | Minimum EVM confirmations required before counting amount toward `confirmed` (applies to ETH and USDT)                                                               |
-| `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No           | empty              | BTC Esplora-compatible API base URL (must support `/address/{address}`; and when `BTC_MIN_CONFIRMATIONS>1`, also `/address/{address}/utxo` and `/blocks/tip/height`) |
-| `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No           | `{}`               | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                        |
-| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                             |
-| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                    |
+| Variable                                                 | Required        | Default                           | Description                                                                                                                                                          |
+| -------------------------------------------------------- | --------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                           | Yes             | none                              | PostgreSQL DSN                                                                                                                                                       |
+| `PORT`                                                   | No              | `8080`                            | HTTP listen port                                                                                                                                                     |
+| `OPENAPI_SPEC_PATH`                                      | No              | `api/openapi.yaml`                | OpenAPI file path                                                                                                                                                    |
+| `PAYMENT_REQUEST_ALLOCATION_MODE`                        | No              | `devtest`                         | Wallet allocation mode (`devtest`, `prod`)                                                                                                                           |
+| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only    | none                              | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported)     |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only    | none                              | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                               |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No              | `[]`                              | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                               |
+| `PAYMENT_REQUEST_RECONCILER_ENABLED`                     | No              | `false`                           | Enable background chain reconciler worker                                                                                                                            |
+| `PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS`       | No              | `15`                              | Reconciler polling interval in seconds                                                                                                                               |
+| `PAYMENT_REQUEST_RECONCILER_BATCH_SIZE`                  | No              | `100`                             | Max open payment requests processed per cycle                                                                                                                        |
+| `PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS`               | No              | `30`                              | Lease duration for claimed open requests (used for multi-replica work partition and crash recovery)                                                                  |
+| `PAYMENT_REQUEST_RECONCILER_WORKER_ID`                   | No              | hostname+pid                      | Optional worker identity override; default is generated from runtime host/process                                                                                    |
+| `PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS`      | No              | `10000`                           | Detected threshold in bps (1-10000), must be `<= PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`                                                                 |
+| `PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`     | No              | `10000`                           | Confirmed threshold in bps (1-10000)                                                                                                                                 |
+| `PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS`       | No              | `1`                               | Minimum BTC confirmations required before counting amount toward `confirmed`                                                                                         |
+| `PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS`       | No              | `1`                               | Minimum EVM confirmations required before counting amount toward `confirmed` (applies to ETH and USDT)                                                               |
+| `PAYMENT_REQUEST_WEBHOOK_ENABLED`                        | No              | `false`                           | Enable webhook dispatcher worker                                                                                                                                     |
+| `PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON`             | No              | `["localhost","127.0.0.1","::1"]` | JSON string array of allowed webhook host patterns (for example `["hooks.example.com","*.partner.example"]`)                                                         |
+| `PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET`                    | Dispatcher only | none                              | HMAC secret for outbound webhook signature (`hmac-sha256`)                                                                                                           |
+| `PAYMENT_REQUEST_WEBHOOK_POLL_INTERVAL_SECONDS`          | No              | `10`                              | Webhook dispatcher polling interval in seconds                                                                                                                       |
+| `PAYMENT_REQUEST_WEBHOOK_BATCH_SIZE`                     | No              | `100`                             | Max webhook events dispatched per cycle                                                                                                                              |
+| `PAYMENT_REQUEST_WEBHOOK_LEASE_SECONDS`                  | No              | `30`                              | Lease duration for claimed webhook events in multi-replica mode                                                                                                      |
+| `PAYMENT_REQUEST_WEBHOOK_WORKER_ID`                      | No              | hostname+pid                      | Optional webhook worker identity override                                                                                                                            |
+| `PAYMENT_REQUEST_WEBHOOK_TIMEOUT_SECONDS`                | No              | `5`                               | HTTP timeout per webhook request in seconds                                                                                                                          |
+| `PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS`                   | No              | `8`                               | Max delivery attempts before terminal `failed` state                                                                                                                 |
+| `PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS`        | No              | `5`                               | Initial retry backoff in seconds                                                                                                                                     |
+| `PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS`            | No              | `300`                             | Max retry backoff in seconds (must be `>= initial`)                                                                                                                  |
+| `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No              | empty                             | BTC Esplora-compatible API base URL (must support `/address/{address}`; and when `BTC_MIN_CONFIRMATIONS>1`, also `/address/{address}/utxo` and `/blocks/tip/height`) |
+| `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No              | `{}`                              | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                        |
+| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No              | `false`                           | Allow mainnet allocation in devtest mode                                                                                                                             |
+| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No              | built-in allowlist                | Override address-scheme allowlist                                                                                                                                    |
 
 ## API Quick Usage
 
@@ -296,6 +317,27 @@ make service-up \
 
 其中 BTC 的成功確認區塊數就是 `PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS`；例如設為 `2`，代表至少 2 confirmations 才會進 `confirmed`。
 
+若你要啟用 webhook（狀態變更事件）：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_WEBHOOK_ENABLED=true \
+  SERVICE_WEBHOOK_DISPATCHER_REPLICAS=2 \
+  SERVICE_WEBHOOK_URL_ALLOWLIST_JSON='["your-receiver.example"]' \
+  SERVICE_WEBHOOK_HMAC_SECRET='replace-with-strong-secret' \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
+
+Webhook 請求會帶以下 headers：
+
+- `X-ChainTx-Event-Id`
+- `X-ChainTx-Event-Type`
+- `X-ChainTx-Timestamp`
+- `X-ChainTx-Signature`（格式：`sha256=<hex>`，計算內容為 `timestamp + "." + body`）
+
+`webhook_url` 是建立 payment request 的必填欄位，且其 host 必須符合 `PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON`。`webhook-dispatcher` runtime 會強制檢查 `PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET`。
+
 若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
 
 ```bash
@@ -353,6 +395,7 @@ curl -i \
     "chain":"bitcoin",
     "network":"testnet",
     "asset":"BTC",
+    "webhook_url":"https://hooks.example.com/chaintx",
     "expected_amount_minor":"150000",
     "expires_in_seconds":3600,
     "metadata":{"order_id":"A123"}
@@ -384,7 +427,7 @@ curl -sS http://127.0.0.1:8080/v1/assets | jq
 ```bash
 PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
   -H 'Content-Type: application/json' \
-  -d '{"chain":"bitcoin","network":"regtest","asset":"BTC","expected_amount_minor":"50000"}')
+  -d '{"chain":"bitcoin","network":"regtest","asset":"BTC","webhook_url":"http://localhost:18080/chaintx/webhook","expected_amount_minor":"50000"}')
 
 PR_ID=$(echo "$PR" | jq -r '.id')
 BTC_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
@@ -434,7 +477,7 @@ curl -sS "http://127.0.0.1:8080/v1/payment-requests/$PR_ID" | jq
 ```bash
 PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
   -H 'Content-Type: application/json' \
-  -d '{"chain":"ethereum","network":"local","asset":"ETH","expected_amount_minor":"1000000000000000"}')
+  -d '{"chain":"ethereum","network":"local","asset":"ETH","webhook_url":"http://localhost:18080/chaintx/webhook","expected_amount_minor":"1000000000000000"}')
 
 ETH_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
 echo "$PR" | jq '{id,status,address:.payment_instructions.address}'
@@ -466,7 +509,7 @@ docker compose -f deployments/local-chains/docker-compose.eth.yml \
 ```bash
 PR=$(curl -sS -X POST http://127.0.0.1:8080/v1/payment-requests \
   -H 'Content-Type: application/json' \
-  -d '{"chain":"ethereum","network":"local","asset":"USDT","expected_amount_minor":"1000000"}')
+  -d '{"chain":"ethereum","network":"local","asset":"USDT","webhook_url":"http://localhost:18080/chaintx/webhook","expected_amount_minor":"1000000"}')
 
 USDT_ADDR=$(echo "$PR" | jq -r '.payment_instructions.address')
 echo "$PR" | jq '{id,status,address:.payment_instructions.address}'

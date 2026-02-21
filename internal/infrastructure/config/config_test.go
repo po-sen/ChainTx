@@ -60,6 +60,33 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ReconcilerEVMMinConf != 1 {
 		t.Fatalf("expected default evm min confirmations 1, got %d", cfg.ReconcilerEVMMinConf)
 	}
+	if cfg.WebhookEnabled {
+		t.Fatalf("expected webhook disabled by default")
+	}
+	if cfg.WebhookPollInterval <= 0 {
+		t.Fatalf("expected positive default webhook poll interval")
+	}
+	if cfg.WebhookBatchSize <= 0 {
+		t.Fatalf("expected positive default webhook batch size")
+	}
+	if cfg.WebhookLeaseDuration <= 0 {
+		t.Fatalf("expected positive default webhook lease duration")
+	}
+	if cfg.WebhookWorkerID == "" {
+		t.Fatalf("expected default webhook worker id")
+	}
+	if cfg.WebhookTimeout <= 0 {
+		t.Fatalf("expected positive default webhook timeout")
+	}
+	if cfg.WebhookMaxAttempts <= 0 {
+		t.Fatalf("expected positive default webhook max attempts")
+	}
+	if cfg.WebhookInitialBackoff <= 0 || cfg.WebhookMaxBackoff <= 0 {
+		t.Fatalf("expected positive webhook backoff defaults")
+	}
+	if len(cfg.WebhookURLAllowList) == 0 {
+		t.Fatalf("expected default webhook allowlist")
+	}
 }
 
 func TestLoadConfigRequiresDatabaseURL(t *testing.T) {
@@ -567,5 +594,120 @@ func TestLoadConfigRejectsInvalidEVMRPCURLs(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_EVM_RPC_URLS_INVALID" {
 		t.Fatalf("expected CONFIG_EVM_RPC_URLS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigParsesWebhookConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ENABLED", "true")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON", `["hooks.example.com","*.partners.example.com"]`)
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET", "webhook-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_POLL_INTERVAL_SECONDS", "7")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_BATCH_SIZE", "25")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_LEASE_SECONDS", "21")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_WORKER_ID", "webhook-worker-a")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_TIMEOUT_SECONDS", "4")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_ATTEMPTS", "9")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS", "6")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS", "120")
+
+	cfg, cfgErr := LoadConfig()
+	if cfgErr != nil {
+		t.Fatalf("expected no error, got %v", cfgErr)
+	}
+	if !cfg.WebhookEnabled {
+		t.Fatalf("expected webhook enabled")
+	}
+	if len(cfg.WebhookURLAllowList) != 2 {
+		t.Fatalf("expected allowlist size 2, got %d", len(cfg.WebhookURLAllowList))
+	}
+	if cfg.WebhookURLAllowList[0] != "hooks.example.com" {
+		t.Fatalf("unexpected allowlist[0]: %s", cfg.WebhookURLAllowList[0])
+	}
+	if cfg.WebhookHMACSecret != "webhook-secret" {
+		t.Fatalf("unexpected webhook hmac secret")
+	}
+	if cfg.WebhookPollInterval.Seconds() != 7 {
+		t.Fatalf("expected webhook poll interval 7s, got %s", cfg.WebhookPollInterval)
+	}
+	if cfg.WebhookBatchSize != 25 {
+		t.Fatalf("expected webhook batch size 25, got %d", cfg.WebhookBatchSize)
+	}
+	if cfg.WebhookLeaseDuration.Seconds() != 21 {
+		t.Fatalf("expected webhook lease duration 21s, got %s", cfg.WebhookLeaseDuration)
+	}
+	if cfg.WebhookWorkerID != "webhook-worker-a" {
+		t.Fatalf("expected webhook worker id webhook-worker-a, got %s", cfg.WebhookWorkerID)
+	}
+	if cfg.WebhookTimeout.Seconds() != 4 {
+		t.Fatalf("expected webhook timeout 4s, got %s", cfg.WebhookTimeout)
+	}
+	if cfg.WebhookMaxAttempts != 9 {
+		t.Fatalf("expected webhook max attempts 9, got %d", cfg.WebhookMaxAttempts)
+	}
+	if cfg.WebhookInitialBackoff.Seconds() != 6 {
+		t.Fatalf("expected webhook initial backoff 6s, got %s", cfg.WebhookInitialBackoff)
+	}
+	if cfg.WebhookMaxBackoff.Seconds() != 120 {
+		t.Fatalf("expected webhook max backoff 120s, got %s", cfg.WebhookMaxBackoff)
+	}
+}
+
+func TestLoadConfigAllowsWebhookWithoutURLForNonDispatcherRuntime(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ENABLED", "true")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET", "webhook-secret")
+
+	cfg, cfgErr := LoadConfig()
+	if cfgErr != nil {
+		t.Fatalf("expected no error, got %v", cfgErr)
+	}
+	if !cfg.WebhookEnabled {
+		t.Fatalf("expected webhook enabled")
+	}
+}
+
+func TestLoadConfigRejectsWebhookMaxBackoffLessThanInitial(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ENABLED", "true")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET", "webhook-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF_SECONDS", "60")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS", "30")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_MAX_BACKOFF_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_MAX_BACKOFF_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookURLAllowlist(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON", `["https://example.com"]`)
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_URL_ALLOWLIST_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_URL_ALLOWLIST_INVALID, got %s", cfgErr.Code)
 	}
 }
