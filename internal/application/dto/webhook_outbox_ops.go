@@ -38,8 +38,9 @@ type ListWebhookDLQEventsOutput struct {
 }
 
 type RequeueWebhookDLQEventCommand struct {
-	EventID string
-	Now     time.Time
+	EventID    string
+	OperatorID string
+	Now        time.Time
 }
 
 type RequeueWebhookDLQEventOutput struct {
@@ -49,9 +50,10 @@ type RequeueWebhookDLQEventOutput struct {
 }
 
 type CancelWebhookOutboxEventCommand struct {
-	EventID string
-	Reason  string
-	Now     time.Time
+	EventID    string
+	OperatorID string
+	Reason     string
+	Now        time.Time
 }
 
 type CancelWebhookOutboxEventOutput struct {

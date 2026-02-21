@@ -227,6 +227,7 @@ WHERE id = $1
 func (r *Repository) RequeueFailedByEventID(
 	ctx context.Context,
 	eventID string,
+	operatorID string,
 	updatedAt time.Time,
 ) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
 	const query = `
@@ -246,6 +247,9 @@ updated AS (
     delivered_at = NULL,
     lease_owner = NULL,
     lease_until = NULL,
+    manual_last_action = 'requeue',
+    manual_last_actor = $3,
+    manual_last_at = $2,
     updated_at = $2
   FROM selected AS s
   WHERE e.id = s.id
@@ -257,12 +261,20 @@ SELECT
   COALESCE((SELECT delivery_status FROM selected LIMIT 1), '') AS current_status,
   EXISTS(SELECT 1 FROM updated) AS updated
 `
-	return runWebhookOutboxMutationWithStatus(ctx, r.db, query, strings.TrimSpace(eventID), updatedAt.UTC())
+	return runWebhookOutboxMutationWithStatus(
+		ctx,
+		r.db,
+		query,
+		strings.TrimSpace(eventID),
+		updatedAt.UTC(),
+		strings.TrimSpace(operatorID),
+	)
 }
 
 func (r *Repository) CancelByEventID(
 	ctx context.Context,
 	eventID string,
+	operatorID string,
 	lastError string,
 	updatedAt time.Time,
 ) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
@@ -277,10 +289,13 @@ updated AS (
   UPDATE app.webhook_outbox_events AS e
   SET
     delivery_status = 'failed',
-    last_error = $2,
+    last_error = $3,
     lease_owner = NULL,
     lease_until = NULL,
-    updated_at = $3
+    manual_last_action = 'cancel',
+    manual_last_actor = $2,
+    manual_last_at = $4,
+    updated_at = $4
   FROM selected AS s
   WHERE e.id = s.id
     AND s.delivery_status IN ('pending', 'failed')
@@ -296,6 +311,7 @@ SELECT
 		r.db,
 		query,
 		strings.TrimSpace(eventID),
+		strings.TrimSpace(operatorID),
 		strings.TrimSpace(lastError),
 		updatedAt.UTC(),
 	)

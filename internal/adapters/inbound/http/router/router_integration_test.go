@@ -186,6 +186,7 @@ func newTestRouter(openAPISpecPath string) *http.ServeMux {
 		stubListWebhookDLQEventsUseCase{},
 		stubRequeueWebhookDLQEventUseCase{},
 		stubCancelWebhookOutboxEventUseCase{},
+		[]string{"ops-key"},
 		logger,
 	)
 

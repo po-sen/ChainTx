@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log"
@@ -19,6 +20,7 @@ type WebhookOutboxController struct {
 	listDLQUseCase  portsin.ListWebhookDLQEventsUseCase
 	requeueUseCase  portsin.RequeueWebhookDLQEventUseCase
 	cancelUseCase   portsin.CancelWebhookOutboxEventUseCase
+	adminKeys       []string
 	logger          *log.Logger
 }
 
@@ -26,11 +28,22 @@ type webhookCancelPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type webhookOpsAuthError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+const (
+	headerAuthorization = "Authorization"
+)
+
 func NewWebhookOutboxController(
 	overviewUseCase portsin.GetWebhookOutboxOverviewUseCase,
 	listDLQUseCase portsin.ListWebhookDLQEventsUseCase,
 	requeueUseCase portsin.RequeueWebhookDLQEventUseCase,
 	cancelUseCase portsin.CancelWebhookOutboxEventUseCase,
+	adminKeys []string,
 	logger *log.Logger,
 ) *WebhookOutboxController {
 	return &WebhookOutboxController{
@@ -38,11 +51,16 @@ func NewWebhookOutboxController(
 		listDLQUseCase:  listDLQUseCase,
 		requeueUseCase:  requeueUseCase,
 		cancelUseCase:   cancelUseCase,
+		adminKeys:       cloneNonEmptyStrings(adminKeys),
 		logger:          logger,
 	}
 }
 
 func (c *WebhookOutboxController) GetOverview(w http.ResponseWriter, r *http.Request) {
+	if authErr := c.requireAdminAuth(r); authErr != nil {
+		c.writeAuthError(w, authErr)
+		return
+	}
 	if c.overviewUseCase == nil {
 		writeAppError(w, apperrors.NewInternal(
 			"webhook_outbox_overview_use_case_missing",
@@ -63,6 +81,10 @@ func (c *WebhookOutboxController) GetOverview(w http.ResponseWriter, r *http.Req
 }
 
 func (c *WebhookOutboxController) ListDLQ(w http.ResponseWriter, r *http.Request) {
+	if authErr := c.requireAdminAuth(r); authErr != nil {
+		c.writeAuthError(w, authErr)
+		return
+	}
 	if c.listDLQUseCase == nil {
 		writeAppError(w, apperrors.NewInternal(
 			"webhook_outbox_dlq_use_case_missing",
@@ -98,6 +120,10 @@ func (c *WebhookOutboxController) ListDLQ(w http.ResponseWriter, r *http.Request
 }
 
 func (c *WebhookOutboxController) RequeueDLQEvent(w http.ResponseWriter, r *http.Request) {
+	if authErr := c.requireAdminAuth(r); authErr != nil {
+		c.writeAuthError(w, authErr)
+		return
+	}
 	if c.requeueUseCase == nil {
 		writeAppError(w, apperrors.NewInternal(
 			"webhook_outbox_requeue_use_case_missing",
@@ -108,9 +134,11 @@ func (c *WebhookOutboxController) RequeueDLQEvent(w http.ResponseWriter, r *http
 	}
 
 	eventID := strings.TrimSpace(r.PathValue("event_id"))
+	operatorID := strings.TrimSpace(r.Header.Get(headerPrincipalID))
 	output, appErr := c.requeueUseCase.Execute(r.Context(), dto.RequeueWebhookDLQEventCommand{
-		EventID: eventID,
-		Now:     time.Now().UTC(),
+		EventID:    eventID,
+		OperatorID: operatorID,
+		Now:        time.Now().UTC(),
 	})
 	if appErr != nil {
 		c.logRequestError(r.Method, "/v1/webhook-outbox/dlq/{event_id}/requeue", appErr)
@@ -122,6 +150,10 @@ func (c *WebhookOutboxController) RequeueDLQEvent(w http.ResponseWriter, r *http
 }
 
 func (c *WebhookOutboxController) CancelEvent(w http.ResponseWriter, r *http.Request) {
+	if authErr := c.requireAdminAuth(r); authErr != nil {
+		c.writeAuthError(w, authErr)
+		return
+	}
 	if c.cancelUseCase == nil {
 		writeAppError(w, apperrors.NewInternal(
 			"webhook_outbox_cancel_use_case_missing",
@@ -138,10 +170,12 @@ func (c *WebhookOutboxController) CancelEvent(w http.ResponseWriter, r *http.Req
 	}
 
 	eventID := strings.TrimSpace(r.PathValue("event_id"))
+	operatorID := strings.TrimSpace(r.Header.Get(headerPrincipalID))
 	output, appErr := c.cancelUseCase.Execute(r.Context(), dto.CancelWebhookOutboxEventCommand{
-		EventID: eventID,
-		Reason:  payload.Reason,
-		Now:     time.Now().UTC(),
+		EventID:    eventID,
+		OperatorID: operatorID,
+		Reason:     payload.Reason,
+		Now:        time.Now().UTC(),
 	})
 	if appErr != nil {
 		c.logRequestError(r.Method, "/v1/webhook-outbox/events/{event_id}/cancel", appErr)
@@ -190,4 +224,82 @@ func parseWebhookCancelPayload(body io.Reader) (webhookCancelPayload, *apperrors
 
 	payload.Reason = strings.TrimSpace(payload.Reason)
 	return payload, nil
+}
+
+func (c *WebhookOutboxController) requireAdminAuth(r *http.Request) *webhookOpsAuthError {
+	if c == nil {
+		return &webhookOpsAuthError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "webhook_ops_auth_not_configured",
+			Message: "webhook ops authentication is not configured",
+		}
+	}
+	if len(c.adminKeys) == 0 {
+		return &webhookOpsAuthError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "webhook_ops_auth_not_configured",
+			Message: "webhook ops authentication is not configured",
+		}
+	}
+
+	token := extractAdminToken(r)
+	if token == "" {
+		return &webhookOpsAuthError{
+			Status:  http.StatusUnauthorized,
+			Code:    "unauthorized",
+			Message: "admin authentication is required",
+		}
+	}
+	for _, candidate := range c.adminKeys {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(candidate)) == 1 {
+			return nil
+		}
+	}
+
+	return &webhookOpsAuthError{
+		Status:  http.StatusUnauthorized,
+		Code:    "unauthorized",
+		Message: "admin authentication failed",
+	}
+}
+
+func (c *WebhookOutboxController) writeAuthError(w http.ResponseWriter, authErr *webhookOpsAuthError) {
+	if authErr == nil {
+		return
+	}
+	writeJSON(w, authErr.Status, errorResponse{
+		Error: errorEnvelope{
+			Code:    authErr.Code,
+			Message: authErr.Message,
+		},
+	})
+}
+
+func extractAdminToken(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	authHeader := strings.TrimSpace(r.Header.Get(headerAuthorization))
+	if len(authHeader) >= len("Bearer ") && strings.EqualFold(authHeader[:len("Bearer ")], "Bearer ") {
+		token := strings.TrimSpace(authHeader[len("Bearer "):])
+		if token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func cloneNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }

@@ -18,9 +18,12 @@ type SwaggerController struct {
 
 func NewSwaggerController(useCase portsin.GetOpenAPISpecUseCase, logger *log.Logger) *SwaggerController {
 	return &SwaggerController{
-		useCase:         useCase,
-		logger:          logger,
-		swaggerUIHandle: httpSwagger.Handler(httpSwagger.URL("/swagger/openapi.yaml")),
+		useCase: useCase,
+		logger:  logger,
+		swaggerUIHandle: httpSwagger.Handler(
+			httpSwagger.URL("/swagger/openapi.yaml"),
+			httpSwagger.PersistAuthorization(true),
+		),
 	}
 }
 

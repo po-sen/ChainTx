@@ -39,6 +39,14 @@ func (u *cancelWebhookOutboxEventUseCase) Execute(
 			map[string]any{"field": "event_id"},
 		)
 	}
+	operatorID := strings.TrimSpace(command.OperatorID)
+	if operatorID == "" {
+		return dto.CancelWebhookOutboxEventOutput{}, apperrors.NewValidation(
+			"invalid_request",
+			"x_principal_id is required",
+			map[string]any{"field": "x_principal_id"},
+		)
+	}
 
 	now := command.Now.UTC()
 	if command.Now.IsZero() {
@@ -46,7 +54,7 @@ func (u *cancelWebhookOutboxEventUseCase) Execute(
 	}
 
 	lastError := normalizeWebhookManualCancelReason(command.Reason)
-	result, appErr := u.repository.CancelByEventID(ctx, eventID, lastError, now)
+	result, appErr := u.repository.CancelByEventID(ctx, eventID, operatorID, lastError, now)
 	if appErr != nil {
 		return dto.CancelWebhookOutboxEventOutput{}, appErr
 	}

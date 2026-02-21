@@ -64,6 +64,7 @@ const webhookInitialBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF
 const webhookMaxBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS"
 const webhookRetryJitterBPSEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS"
 const webhookRetryBudgetEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET"
+const webhookOpsAdminKeysEnv = "PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON"
 const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
 const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
 
@@ -119,6 +120,7 @@ type Config struct {
 	WebhookMaxBackoff        time.Duration
 	WebhookRetryJitterBPS    int
 	WebhookRetryBudget       int
+	WebhookOpsAdminKeys      []string
 	BTCExploraBaseURL        string
 	EVMRPCURLs               map[string]string
 	AddressSchemeAllowList   map[string]map[string]struct{}
@@ -189,6 +191,12 @@ func LoadConfig() (Config, *ConfigError) {
 	)
 	if legacySecretErr != nil {
 		return Config{}, legacySecretErr
+	}
+	webhookOpsAdminKeys, webhookOpsAdminKeysErr := parseWebhookOpsAdminKeys(
+		strings.TrimSpace(os.Getenv(webhookOpsAdminKeysEnv)),
+	)
+	if webhookOpsAdminKeysErr != nil {
+		return Config{}, webhookOpsAdminKeysErr
 	}
 	reconcilerCfg, reconcilerErr := parseReconcilerConfig()
 	if reconcilerErr != nil {
@@ -265,6 +273,7 @@ func LoadConfig() (Config, *ConfigError) {
 		WebhookMaxBackoff:        webhookCfg.MaxBackoff,
 		WebhookRetryJitterBPS:    webhookCfg.RetryJitterBPS,
 		WebhookRetryBudget:       webhookCfg.RetryBudget,
+		WebhookOpsAdminKeys:      webhookOpsAdminKeys,
 		BTCExploraBaseURL:        btcExploraBaseURL,
 		EVMRPCURLs:               evmRPCURLs,
 		AddressSchemeAllowList:   addressSchemeAllowList,
@@ -567,6 +576,36 @@ func parseLegacyHMACSecrets(raw string) ([]string, *ConfigError) {
 	out := make([]string, 0, len(rawSecrets))
 	for _, secret := range rawSecrets {
 		trimmed := strings.TrimSpace(secret)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+
+	return out, nil
+}
+
+func parseWebhookOpsAdminKeys(raw string) ([]string, *ConfigError) {
+	if raw == "" {
+		return []string{}, nil
+	}
+
+	rawKeys := []string{}
+	if err := json.Unmarshal([]byte(raw), &rawKeys); err != nil {
+		return nil, &ConfigError{
+			Code:    "CONFIG_WEBHOOK_OPS_ADMIN_KEYS_INVALID",
+			Message: webhookOpsAdminKeysEnv + " must be a JSON array of strings",
+		}
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(rawKeys))
+	for _, key := range rawKeys {
+		trimmed := strings.TrimSpace(key)
 		if trimmed == "" {
 			continue
 		}

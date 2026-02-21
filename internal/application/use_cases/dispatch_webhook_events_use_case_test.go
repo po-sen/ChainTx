@@ -614,6 +614,7 @@ func (f *fakeWebhookOutboxRepository) RenewLease(
 func (f *fakeWebhookOutboxRepository) RequeueFailedByEventID(
 	_ context.Context,
 	_ string,
+	_ string,
 	_ time.Time,
 ) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
 	return dto.WebhookOutboxMutationResult{}, nil
@@ -621,6 +622,7 @@ func (f *fakeWebhookOutboxRepository) RequeueFailedByEventID(
 
 func (f *fakeWebhookOutboxRepository) CancelByEventID(
 	_ context.Context,
+	_ string,
 	_ string,
 	_ string,
 	_ time.Time,

@@ -90,6 +90,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.WebhookRetryBudget != 0 {
 		t.Fatalf("expected default webhook retry budget 0, got %d", cfg.WebhookRetryBudget)
 	}
+	if len(cfg.WebhookOpsAdminKeys) != 0 {
+		t.Fatalf("expected default webhook ops admin keys empty, got %d", len(cfg.WebhookOpsAdminKeys))
+	}
 	if len(cfg.WebhookURLAllowList) == 0 {
 		t.Fatalf("expected default webhook allowlist")
 	}
@@ -628,6 +631,7 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS", "120")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS", "1800")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET", "4")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON", `["ops-key-a","ops-key-b"]`)
 
 	cfg, cfgErr := LoadConfig()
 	if cfgErr != nil {
@@ -674,6 +678,12 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	}
 	if cfg.WebhookRetryBudget != 4 {
 		t.Fatalf("expected webhook retry budget 4, got %d", cfg.WebhookRetryBudget)
+	}
+	if len(cfg.WebhookOpsAdminKeys) != 2 {
+		t.Fatalf("expected webhook ops admin keys size 2, got %d", len(cfg.WebhookOpsAdminKeys))
+	}
+	if cfg.WebhookOpsAdminKeys[0] != "ops-key-a" || cfg.WebhookOpsAdminKeys[1] != "ops-key-b" {
+		t.Fatalf("unexpected webhook ops admin keys: %+v", cfg.WebhookOpsAdminKeys)
 	}
 }
 
@@ -738,6 +748,21 @@ func TestLoadConfigRejectsInvalidWebhookRetryBudget(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_WEBHOOK_RETRY_BUDGET_INVALID" {
 		t.Fatalf("expected CONFIG_WEBHOOK_RETRY_BUDGET_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookOpsAdminKeys(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON", `{bad-json`)
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_OPS_ADMIN_KEYS_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_OPS_ADMIN_KEYS_INVALID, got %s", cfgErr.Code)
 	}
 }
 

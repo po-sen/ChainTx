@@ -49,11 +49,13 @@ type WebhookOutboxRepository interface {
 	RequeueFailedByEventID(
 		ctx context.Context,
 		eventID string,
+		operatorID string,
 		updatedAt time.Time,
 	) (dto.WebhookOutboxMutationResult, *apperrors.AppError)
 	CancelByEventID(
 		ctx context.Context,
 		eventID string,
+		operatorID string,
 		lastError string,
 		updatedAt time.Time,
 	) (dto.WebhookOutboxMutationResult, *apperrors.AppError)

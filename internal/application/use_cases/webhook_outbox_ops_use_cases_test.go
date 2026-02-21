@@ -62,7 +62,11 @@ func TestRequeueWebhookDLQEventUseCaseReturnsConflictWhenStatusNotFailed(t *test
 	}
 	useCase := NewRequeueWebhookDLQEventUseCase(repo)
 
-	_, appErr := useCase.Execute(context.Background(), dto.RequeueWebhookDLQEventCommand{EventID: "evt_x", Now: now})
+	_, appErr := useCase.Execute(context.Background(), dto.RequeueWebhookDLQEventCommand{
+		EventID:    "evt_x",
+		OperatorID: "ops-user-1",
+		Now:        now,
+	})
 	if appErr == nil {
 		t.Fatalf("expected conflict error")
 	}
@@ -78,7 +82,11 @@ func TestRequeueWebhookDLQEventUseCaseSuccess(t *testing.T) {
 	}
 	useCase := NewRequeueWebhookDLQEventUseCase(repo)
 
-	output, appErr := useCase.Execute(context.Background(), dto.RequeueWebhookDLQEventCommand{EventID: "evt_x", Now: now})
+	output, appErr := useCase.Execute(context.Background(), dto.RequeueWebhookDLQEventCommand{
+		EventID:    "evt_x",
+		OperatorID: "ops-user-1",
+		Now:        now,
+	})
 	if appErr != nil {
 		t.Fatalf("expected no error, got %+v", appErr)
 	}
@@ -95,8 +103,9 @@ func TestCancelWebhookOutboxEventUseCaseUsesDefaultReason(t *testing.T) {
 	useCase := NewCancelWebhookOutboxEventUseCase(repo)
 
 	output, appErr := useCase.Execute(context.Background(), dto.CancelWebhookOutboxEventCommand{
-		EventID: "evt_x",
-		Now:     now,
+		EventID:    "evt_x",
+		OperatorID: "ops-user-1",
+		Now:        now,
 	})
 	if appErr != nil {
 		t.Fatalf("expected no error, got %+v", appErr)
@@ -115,12 +124,45 @@ func TestCancelWebhookOutboxEventUseCaseReturnsNotFound(t *testing.T) {
 	}
 	useCase := NewCancelWebhookOutboxEventUseCase(repo)
 
-	_, appErr := useCase.Execute(context.Background(), dto.CancelWebhookOutboxEventCommand{EventID: "evt_missing"})
+	_, appErr := useCase.Execute(context.Background(), dto.CancelWebhookOutboxEventCommand{
+		EventID:    "evt_missing",
+		OperatorID: "ops-user-1",
+	})
 	if appErr == nil {
 		t.Fatalf("expected not found error")
 	}
 	if appErr.Type != apperrors.TypeNotFound {
 		t.Fatalf("expected not_found type, got %+v", appErr)
+	}
+}
+
+func TestRequeueWebhookDLQEventUseCaseRejectsMissingOperatorID(t *testing.T) {
+	repo := &fakeWebhookOutboxOpsRepository{}
+	useCase := NewRequeueWebhookDLQEventUseCase(repo)
+
+	_, appErr := useCase.Execute(context.Background(), dto.RequeueWebhookDLQEventCommand{
+		EventID: "evt_x",
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "invalid_request" {
+		t.Fatalf("expected invalid_request, got %+v", appErr)
+	}
+}
+
+func TestCancelWebhookOutboxEventUseCaseRejectsMissingOperatorID(t *testing.T) {
+	repo := &fakeWebhookOutboxOpsRepository{}
+	useCase := NewCancelWebhookOutboxEventUseCase(repo)
+
+	_, appErr := useCase.Execute(context.Background(), dto.CancelWebhookOutboxEventCommand{
+		EventID: "evt_x",
+	})
+	if appErr == nil {
+		t.Fatalf("expected validation error")
+	}
+	if appErr.Code != "invalid_request" {
+		t.Fatalf("expected invalid_request, got %+v", appErr)
 	}
 }
 
@@ -212,6 +254,7 @@ func (f *fakeWebhookOutboxOpsRepository) RenewLease(
 func (f *fakeWebhookOutboxOpsRepository) RequeueFailedByEventID(
 	_ context.Context,
 	_ string,
+	_ string,
 	_ time.Time,
 ) (dto.WebhookOutboxMutationResult, *apperrors.AppError) {
 	if f.requeueErr != nil {
@@ -222,6 +265,7 @@ func (f *fakeWebhookOutboxOpsRepository) RequeueFailedByEventID(
 
 func (f *fakeWebhookOutboxOpsRepository) CancelByEventID(
 	_ context.Context,
+	_ string,
 	_ string,
 	lastError string,
 	_ time.Time,

@@ -22,10 +22,12 @@ func TestWebhookOutboxControllerGetOverview(t *testing.T) {
 		stubListDLQUseCase{},
 		stubRequeueDLQUseCase{},
 		stubCancelEventUseCase{},
+		[]string{"ops-key"},
 		log.New(io.Discard, "", 0),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+	req.Header.Set("Authorization", "Bearer ops-key")
 	rec := httptest.NewRecorder()
 
 	controller.GetOverview(rec, req)
@@ -38,16 +40,60 @@ func TestWebhookOutboxControllerGetOverview(t *testing.T) {
 	}
 }
 
+func TestWebhookOutboxControllerGetOverviewWithBearerAuth(t *testing.T) {
+	controller := NewWebhookOutboxController(
+		stubOverviewUseCase{},
+		stubListDLQUseCase{},
+		stubRequeueDLQUseCase{},
+		stubCancelEventUseCase{},
+		[]string{"ops-key"},
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+	req.Header.Set("Authorization", "Bearer ops-key")
+	rec := httptest.NewRecorder()
+
+	controller.GetOverview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhookOutboxControllerRejectsLegacyAdminHeaderOnly(t *testing.T) {
+	controller := NewWebhookOutboxController(
+		stubOverviewUseCase{},
+		stubListDLQUseCase{},
+		stubRequeueDLQUseCase{},
+		stubCancelEventUseCase{},
+		[]string{"ops-key"},
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+	req.Header.Set("X-ChainTx-Admin-Key", "ops-key")
+	rec := httptest.NewRecorder()
+
+	controller.GetOverview(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestWebhookOutboxControllerListDLQRejectsInvalidLimit(t *testing.T) {
 	controller := NewWebhookOutboxController(
 		stubOverviewUseCase{},
 		stubListDLQUseCase{},
 		stubRequeueDLQUseCase{},
 		stubCancelEventUseCase{},
+		[]string{"ops-key"},
 		log.New(io.Discard, "", 0),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/dlq?limit=abc", nil)
+	req.Header.Set("Authorization", "Bearer ops-key")
 	rec := httptest.NewRecorder()
 
 	controller.ListDLQ(rec, req)
@@ -63,11 +109,14 @@ func TestWebhookOutboxControllerRequeueDLQEvent(t *testing.T) {
 		stubListDLQUseCase{},
 		stubRequeueDLQUseCase{},
 		stubCancelEventUseCase{},
+		[]string{"ops-key"},
 		log.New(io.Discard, "", 0),
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/webhook-outbox/dlq/evt_1/requeue", nil)
 	req.SetPathValue("event_id", "evt_1")
+	req.Header.Set("Authorization", "Bearer ops-key")
+	req.Header.Set("X-Principal-ID", "ops-user-1")
 	rec := httptest.NewRecorder()
 
 	controller.RequeueDLQEvent(rec, req)
@@ -86,11 +135,14 @@ func TestWebhookOutboxControllerCancelEventInvalidJSON(t *testing.T) {
 		stubListDLQUseCase{},
 		stubRequeueDLQUseCase{},
 		stubCancelEventUseCase{},
+		[]string{"ops-key"},
 		log.New(io.Discard, "", 0),
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/webhook-outbox/events/evt_1/cancel", bytes.NewBufferString("{"))
 	req.SetPathValue("event_id", "evt_1")
+	req.Header.Set("Authorization", "Bearer ops-key")
+	req.Header.Set("X-Principal-ID", "ops-user-1")
 	rec := httptest.NewRecorder()
 
 	controller.CancelEvent(rec, req)
@@ -107,6 +159,7 @@ func TestWebhookOutboxControllerCancelEventSuccess(t *testing.T) {
 		stubListDLQUseCase{},
 		stubRequeueDLQUseCase{},
 		cancelUseCase,
+		[]string{"ops-key"},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -116,6 +169,8 @@ func TestWebhookOutboxControllerCancelEventSuccess(t *testing.T) {
 		bytes.NewBufferString(`{"reason":"operator action"}`),
 	)
 	req.SetPathValue("event_id", "evt_1")
+	req.Header.Set("Authorization", "Bearer ops-key")
+	req.Header.Set("X-Principal-ID", "ops-user-1")
 	rec := httptest.NewRecorder()
 
 	controller.CancelEvent(rec, req)
@@ -128,6 +183,47 @@ func TestWebhookOutboxControllerCancelEventSuccess(t *testing.T) {
 	}
 	if cancelUseCase.lastCommand.Reason != "operator action" {
 		t.Fatalf("expected reason operator action, got %+v", cancelUseCase.lastCommand)
+	}
+	if cancelUseCase.lastCommand.OperatorID != "ops-user-1" {
+		t.Fatalf("expected operator id ops-user-1, got %+v", cancelUseCase.lastCommand)
+	}
+}
+
+func TestWebhookOutboxControllerRejectsUnauthorized(t *testing.T) {
+	controller := NewWebhookOutboxController(
+		stubOverviewUseCase{},
+		stubListDLQUseCase{},
+		stubRequeueDLQUseCase{},
+		stubCancelEventUseCase{},
+		[]string{"ops-key"},
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+	rec := httptest.NewRecorder()
+	controller.GetOverview(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhookOutboxControllerRejectsWhenAdminKeysNotConfigured(t *testing.T) {
+	controller := NewWebhookOutboxController(
+		stubOverviewUseCase{},
+		stubListDLQUseCase{},
+		stubRequeueDLQUseCase{},
+		stubCancelEventUseCase{},
+		nil,
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+	rec := httptest.NewRecorder()
+	controller.GetOverview(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

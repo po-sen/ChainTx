@@ -228,6 +228,7 @@ make chain-down-all
 | `PAYMENT_REQUEST_WEBHOOK_ENABLED`                        | No              | `false`                           | Enable webhook dispatcher worker                                                                                                                                     |
 | `PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON`             | No              | `["localhost","127.0.0.1","::1"]` | JSON string array of allowed webhook host patterns (for example `["hooks.example.com","*.partner.example"]`)                                                         |
 | `PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET`                    | Dispatcher only | none                              | HMAC secret for outbound webhook signature (`hmac-sha256`)                                                                                                           |
+| `PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON`            | No              | `[]`                              | JSON string array of admin keys for `/v1/webhook-outbox/*` ops auth (key rotation supported)                                                                         |
 | `PAYMENT_REQUEST_WEBHOOK_POLL_INTERVAL_SECONDS`          | No              | `10`                              | Webhook dispatcher polling interval in seconds                                                                                                                       |
 | `PAYMENT_REQUEST_WEBHOOK_BATCH_SIZE`                     | No              | `100`                             | Max webhook events dispatched per cycle                                                                                                                              |
 | `PAYMENT_REQUEST_WEBHOOK_LEASE_SECONDS`                  | No              | `30`                              | Lease duration for claimed webhook events in multi-replica mode                                                                                                      |
@@ -328,6 +329,7 @@ make service-up \
   SERVICE_WEBHOOK_DISPATCHER_REPLICAS=2 \
   SERVICE_WEBHOOK_URL_ALLOWLIST_JSON='["your-receiver.example"]' \
   SERVICE_WEBHOOK_HMAC_SECRET='replace-with-strong-secret' \
+  SERVICE_WEBHOOK_OPS_ADMIN_KEYS_JSON='["ops-admin-key-1","ops-admin-key-2"]' \
   SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
 ```
 
@@ -367,6 +369,13 @@ Webhook outbox 維運端點：
 - `GET /v1/webhook-outbox/dlq?limit=50`：列出目前 `failed`（DLQ）事件。
 - `POST /v1/webhook-outbox/dlq/{event_id}/requeue`：將單筆 `failed` 事件重排回 `pending`。
 - `POST /v1/webhook-outbox/events/{event_id}/cancel`：手動取消事件（標記 `failed`，並寫入 `manual_cancelled` reason）。
+
+Webhook outbox 維運端點認證規則：
+
+- 需提供管理者金鑰：`Authorization: Bearer <key>`。
+- 在 Swagger UI 可先點右上角 `Authorize`，選 `WebhookOpsBearerAuth`，輸入 `ops-key-1`（UI 會自動帶上 `Bearer` 前綴）。
+- 若未設定 `PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON`，端點會 fail-closed 回 `503 webhook_ops_auth_not_configured`。
+- `requeue` / `cancel` 另外必填 `X-Principal-ID`，用於審計欄位記錄（缺少時回 `400 invalid_request`）。
 
 若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
 
@@ -435,25 +444,34 @@ curl -i \
 Webhook outbox overview：
 
 ```bash
-curl -i http://localhost:8080/v1/webhook-outbox/overview
+curl -i \
+  -H 'Authorization: Bearer ops-admin-key-1' \
+  http://localhost:8080/v1/webhook-outbox/overview
 ```
 
 列出 DLQ（failed）事件：
 
 ```bash
-curl -i 'http://localhost:8080/v1/webhook-outbox/dlq?limit=50'
+curl -i \
+  -H 'Authorization: Bearer ops-admin-key-1' \
+  'http://localhost:8080/v1/webhook-outbox/dlq?limit=50'
 ```
 
 手動 requeue 單筆 DLQ 事件：
 
 ```bash
-curl -i -X POST http://localhost:8080/v1/webhook-outbox/dlq/evt_example/requeue
+curl -i \
+  -H 'Authorization: Bearer ops-admin-key-1' \
+  -H 'X-Principal-ID: ops-user-001' \
+  -X POST http://localhost:8080/v1/webhook-outbox/dlq/evt_example/requeue
 ```
 
 手動 cancel 單筆事件：
 
 ```bash
 curl -i \
+  -H 'Authorization: Bearer ops-admin-key-1' \
+  -H 'X-Principal-ID: ops-user-001' \
   -H 'Content-Type: application/json' \
   -X POST http://localhost:8080/v1/webhook-outbox/events/evt_example/cancel \
   -d '{"reason":"operator_cancelled"}'

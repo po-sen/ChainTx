@@ -227,6 +227,8 @@ paths:
       operationId: getWebhookOutboxOverview
       tags:
         - webhook
+      security:
+        - WebhookOpsBearerAuth: []
       responses:
         "200":
           description: Webhook outbox summary
@@ -234,6 +236,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WebhookOutboxOverviewResponse'
+        "401":
+          description: Unauthorized webhook ops request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Webhook ops auth not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/webhook-outbox/dlq:
     get:
@@ -241,6 +255,8 @@ paths:
       operationId: listWebhookDLQEvents
       tags:
         - webhook
+      security:
+        - WebhookOpsBearerAuth: []
       parameters:
         - in: query
           name: limit
@@ -263,6 +279,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized webhook ops request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Webhook ops auth not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/webhook-outbox/dlq/{event_id}/requeue:
     post:
@@ -270,7 +298,10 @@ paths:
       operationId: requeueWebhookDLQEvent
       tags:
         - webhook
+      security:
+        - WebhookOpsBearerAuth: []
       parameters:
+        - $ref: '#/components/parameters/WebhookOpsPrincipalIDHeader'
         - in: path
           name: event_id
           required: true
@@ -283,6 +314,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WebhookDLQRequeueResponse'
+        "400":
+          description: Request validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: Event not found
           content:
@@ -295,6 +332,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized webhook ops request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Webhook ops auth not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/webhook-outbox/events/{event_id}/cancel:
     post:
@@ -302,7 +351,10 @@ paths:
       operationId: cancelWebhookOutboxEvent
       tags:
         - webhook
+      security:
+        - WebhookOpsBearerAuth: []
       parameters:
+        - $ref: '#/components/parameters/WebhookOpsPrincipalIDHeader'
         - in: path
           name: event_id
           required: true
@@ -339,8 +391,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Unauthorized webhook ops request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Webhook ops auth not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
+  securitySchemes:
+    WebhookOpsBearerAuth:
+      type: http
+      scheme: bearer
+      description: "Admin key bearer auth for webhook outbox operations."
+  parameters:
+    WebhookOpsPrincipalIDHeader:
+      in: header
+      name: X-Principal-ID
+      required: true
+      schema:
+        type: string
+      description: "Operator identity required for manual requeue/cancel audit."
   schemas:
     ErrorResponse:
       type: object

@@ -39,13 +39,21 @@ func (u *requeueWebhookDLQEventUseCase) Execute(
 			map[string]any{"field": "event_id"},
 		)
 	}
+	operatorID := strings.TrimSpace(command.OperatorID)
+	if operatorID == "" {
+		return dto.RequeueWebhookDLQEventOutput{}, apperrors.NewValidation(
+			"invalid_request",
+			"x_principal_id is required",
+			map[string]any{"field": "x_principal_id"},
+		)
+	}
 
 	now := command.Now.UTC()
 	if command.Now.IsZero() {
 		now = time.Now().UTC()
 	}
 
-	result, appErr := u.repository.RequeueFailedByEventID(ctx, eventID, now)
+	result, appErr := u.repository.RequeueFailedByEventID(ctx, eventID, operatorID, now)
 	if appErr != nil {
 		return dto.RequeueWebhookDLQEventOutput{}, appErr
 	}

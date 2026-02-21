@@ -136,6 +136,7 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 		listWebhookDLQEventsUseCase,
 		requeueWebhookDLQEventUseCase,
 		cancelWebhookOutboxEventUseCase,
+		cfg.WebhookOpsAdminKeys,
 		logger,
 	)
 
