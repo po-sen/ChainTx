@@ -95,6 +95,8 @@ func Build(cfg config.Config, logger *log.Logger) (Container, error) {
 		EVMRPCURLs:        cfg.EVMRPCURLs,
 		DetectedBPS:       cfg.ReconcilerDetectedBPS,
 		ConfirmedBPS:      cfg.ReconcilerConfirmedBPS,
+		BTCMinConf:        cfg.ReconcilerBTCMinConf,
+		EVMMinConf:        cfg.ReconcilerEVMMinConf,
 	})
 
 	listAssetsUseCase := use_cases.NewListAssetsUseCase(assetCatalogReadModel)

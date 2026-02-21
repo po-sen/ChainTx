@@ -23,6 +23,8 @@ const (
 	defaultReconcilerLeaseDuration  = 30 * time.Second
 	defaultDetectedThresholdBPS     = 10000
 	defaultConfirmedThresholdBPS    = 10000
+	defaultBTCMinConfirmations      = 1
+	defaultEVMMinConfirmations      = 1
 )
 
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
@@ -36,6 +38,8 @@ const reconcilerLeaseSecondsEnv = "PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS"
 const reconcilerWorkerIDEnv = "PAYMENT_REQUEST_RECONCILER_WORKER_ID"
 const reconcilerDetectedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS"
 const reconcilerConfirmedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS"
+const reconcilerBTCMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS"
+const reconcilerEVMMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS"
 const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
 const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
 
@@ -76,6 +80,8 @@ type Config struct {
 	ReconcilerWorkerID       string
 	ReconcilerDetectedBPS    int
 	ReconcilerConfirmedBPS   int
+	ReconcilerBTCMinConf     int
+	ReconcilerEVMMinConf     int
 	BTCExploraBaseURL        string
 	EVMRPCURLs               map[string]string
 	AddressSchemeAllowList   map[string]map[string]struct{}
@@ -147,7 +153,7 @@ func LoadConfig() (Config, *ConfigError) {
 	if legacySecretErr != nil {
 		return Config{}, legacySecretErr
 	}
-	reconcilerEnabled, reconcilerPollInterval, reconcilerBatchSize, reconcilerLeaseDuration, reconcilerDetectedBPS, reconcilerConfirmedBPS, reconcilerErr := parseReconcilerConfig()
+	reconcilerCfg, reconcilerErr := parseReconcilerConfig()
 	if reconcilerErr != nil {
 		return Config{}, reconcilerErr
 	}
@@ -160,7 +166,7 @@ func LoadConfig() (Config, *ConfigError) {
 	if evmRPCURLsErr != nil {
 		return Config{}, evmRPCURLsErr
 	}
-	if reconcilerEnabled && btcExploraBaseURL == "" && len(evmRPCURLs) == 0 {
+	if reconcilerCfg.Enabled && btcExploraBaseURL == "" && len(evmRPCURLs) == 0 {
 		return Config{}, &ConfigError{
 			Code:    "CONFIG_RECONCILER_ENDPOINTS_REQUIRED",
 			Message: "at least one observer endpoint is required when reconciler is enabled",
@@ -188,13 +194,15 @@ func LoadConfig() (Config, *ConfigError) {
 		KeysetHashAlgorithm:      defaultKeysetHashAlgo,
 		KeysetHashHMACSecret:     keysetHashHMACSecret,
 		KeysetHashHMACLegacyKeys: keysetHashLegacyKeys,
-		ReconcilerEnabled:        reconcilerEnabled,
-		ReconcilerPollInterval:   reconcilerPollInterval,
-		ReconcilerBatchSize:      reconcilerBatchSize,
-		ReconcilerLeaseDuration:  reconcilerLeaseDuration,
+		ReconcilerEnabled:        reconcilerCfg.Enabled,
+		ReconcilerPollInterval:   reconcilerCfg.PollInterval,
+		ReconcilerBatchSize:      reconcilerCfg.BatchSize,
+		ReconcilerLeaseDuration:  reconcilerCfg.LeaseDuration,
 		ReconcilerWorkerID:       reconcilerWorkerID,
-		ReconcilerDetectedBPS:    reconcilerDetectedBPS,
-		ReconcilerConfirmedBPS:   reconcilerConfirmedBPS,
+		ReconcilerDetectedBPS:    reconcilerCfg.DetectedBPS,
+		ReconcilerConfirmedBPS:   reconcilerCfg.ConfirmedBPS,
+		ReconcilerBTCMinConf:     reconcilerCfg.BTCMinConfirmations,
+		ReconcilerEVMMinConf:     reconcilerCfg.EVMMinConfirmations,
 		BTCExploraBaseURL:        btcExploraBaseURL,
 		EVMRPCURLs:               evmRPCURLs,
 		AddressSchemeAllowList:   addressSchemeAllowList,
@@ -510,13 +518,24 @@ func parseLegacyHMACSecrets(raw string) ([]string, *ConfigError) {
 	return out, nil
 }
 
-func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int, *ConfigError) {
+type reconcilerRuntimeConfig struct {
+	Enabled             bool
+	PollInterval        time.Duration
+	BatchSize           int
+	LeaseDuration       time.Duration
+	DetectedBPS         int
+	ConfirmedBPS        int
+	BTCMinConfirmations int
+	EVMMinConfirmations int
+}
+
+func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
 	enabled := false
 	rawEnabled := strings.TrimSpace(os.Getenv(reconcilerEnabledEnv))
 	if rawEnabled != "" {
 		parsed, err := strconv.ParseBool(rawEnabled)
 		if err != nil {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_ENABLED_INVALID",
 				Message: reconcilerEnabledEnv + " must be a boolean",
 			}
@@ -529,7 +548,7 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	if rawPollInterval != "" {
 		seconds, err := strconv.Atoi(rawPollInterval)
 		if err != nil || seconds <= 0 {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_POLL_INTERVAL_INVALID",
 				Message: reconcilerPollIntervalEnv + " must be a positive integer in seconds",
 			}
@@ -542,7 +561,7 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	if rawBatchSize != "" {
 		parsed, err := strconv.Atoi(rawBatchSize)
 		if err != nil || parsed <= 0 {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_BATCH_SIZE_INVALID",
 				Message: reconcilerBatchSizeEnv + " must be a positive integer",
 			}
@@ -555,7 +574,7 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	if rawLeaseSeconds != "" {
 		seconds, err := strconv.Atoi(rawLeaseSeconds)
 		if err != nil || seconds <= 0 {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_LEASE_SECONDS_INVALID",
 				Message: reconcilerLeaseSecondsEnv + " must be a positive integer in seconds",
 			}
@@ -568,7 +587,7 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	if rawDetectedBPS != "" {
 		parsed, err := strconv.Atoi(rawDetectedBPS)
 		if err != nil {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_DETECTED_THRESHOLD_BPS_INVALID",
 				Message: reconcilerDetectedThresholdBPSEnv + " must be an integer",
 			}
@@ -581,7 +600,7 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	if rawConfirmedBPS != "" {
 		parsed, err := strconv.Atoi(rawConfirmedBPS)
 		if err != nil {
-			return false, 0, 0, 0, 0, 0, &ConfigError{
+			return reconcilerRuntimeConfig{}, &ConfigError{
 				Code:    "CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID",
 				Message: reconcilerConfirmedThresholdBPSEnv + " must be an integer",
 			}
@@ -590,19 +609,54 @@ func parseReconcilerConfig() (bool, time.Duration, int, time.Duration, int, int,
 	}
 
 	if confirmedBPS < 1 || confirmedBPS > 10000 {
-		return false, 0, 0, 0, 0, 0, &ConfigError{
+		return reconcilerRuntimeConfig{}, &ConfigError{
 			Code:    "CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID",
 			Message: reconcilerConfirmedThresholdBPSEnv + " must be between 1 and 10000",
 		}
 	}
 	if detectedBPS < 1 || detectedBPS > confirmedBPS {
-		return false, 0, 0, 0, 0, 0, &ConfigError{
+		return reconcilerRuntimeConfig{}, &ConfigError{
 			Code:    "CONFIG_RECONCILER_DETECTED_THRESHOLD_BPS_INVALID",
 			Message: reconcilerDetectedThresholdBPSEnv + " must be between 1 and " + strconv.Itoa(confirmedBPS),
 		}
 	}
 
-	return enabled, pollInterval, batchSize, leaseDuration, detectedBPS, confirmedBPS, nil
+	btcMinConfirmations := defaultBTCMinConfirmations
+	rawBTCMinConfirmations := strings.TrimSpace(os.Getenv(reconcilerBTCMinConfirmationsEnv))
+	if rawBTCMinConfirmations != "" {
+		parsed, err := strconv.Atoi(rawBTCMinConfirmations)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_BTC_MIN_CONFIRMATIONS_INVALID",
+				Message: reconcilerBTCMinConfirmationsEnv + " must be a positive integer",
+			}
+		}
+		btcMinConfirmations = parsed
+	}
+
+	evmMinConfirmations := defaultEVMMinConfirmations
+	rawEVMMinConfirmations := strings.TrimSpace(os.Getenv(reconcilerEVMMinConfirmationsEnv))
+	if rawEVMMinConfirmations != "" {
+		parsed, err := strconv.Atoi(rawEVMMinConfirmations)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_EVM_MIN_CONFIRMATIONS_INVALID",
+				Message: reconcilerEVMMinConfirmationsEnv + " must be a positive integer",
+			}
+		}
+		evmMinConfirmations = parsed
+	}
+
+	return reconcilerRuntimeConfig{
+		Enabled:             enabled,
+		PollInterval:        pollInterval,
+		BatchSize:           batchSize,
+		LeaseDuration:       leaseDuration,
+		DetectedBPS:         detectedBPS,
+		ConfirmedBPS:        confirmedBPS,
+		BTCMinConfirmations: btcMinConfirmations,
+		EVMMinConfirmations: evmMinConfirmations,
+	}, nil
 }
 
 func defaultReconcilerWorkerID() string {

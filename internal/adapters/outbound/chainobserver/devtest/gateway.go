@@ -16,6 +16,8 @@ const (
 	defaultHTTPTimeout  = 5 * time.Second
 	defaultDetectedBPS  = 10000
 	defaultConfirmedBPS = 10000
+	defaultBTCMinConf   = 1
+	defaultEVMMinConf   = 1
 )
 
 type Config struct {
@@ -23,6 +25,8 @@ type Config struct {
 	EVMRPCURLs        map[string]string
 	DetectedBPS       int
 	ConfirmedBPS      int
+	BTCMinConf        int
+	EVMMinConf        int
 	HTTPTimeout       time.Duration
 }
 
@@ -51,14 +55,20 @@ func NewGateway(cfg Config) *Gateway {
 		defaultDetectedBPS,
 		defaultConfirmedBPS,
 	)
+	confirmations := newConfirmationPolicy(
+		cfg.BTCMinConf,
+		cfg.EVMMinConf,
+		defaultBTCMinConf,
+		defaultEVMMinConf,
+	)
 
 	httpClient := &http.Client{}
 	rpcClient := newJSONRPCClient(httpClient, httpTimeout)
 
 	return &Gateway{
 		observers: map[string]paymentObserver{
-			"bitcoin":  newBitcoinObserver(cfg.BTCExploraBaseURL, httpClient, httpTimeout, thresholds),
-			"ethereum": newEVMObserver(cfg.EVMRPCURLs, rpcClient, thresholds),
+			"bitcoin":  newBitcoinObserver(cfg.BTCExploraBaseURL, httpClient, httpTimeout, thresholds, confirmations),
+			"ethereum": newEVMObserver(cfg.EVMRPCURLs, rpcClient, thresholds, confirmations),
 		},
 	}
 }

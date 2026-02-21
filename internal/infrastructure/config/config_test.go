@@ -54,6 +54,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ReconcilerConfirmedBPS != 10000 {
 		t.Fatalf("expected default confirmed bps 10000, got %d", cfg.ReconcilerConfirmedBPS)
 	}
+	if cfg.ReconcilerBTCMinConf != 1 {
+		t.Fatalf("expected default btc min confirmations 1, got %d", cfg.ReconcilerBTCMinConf)
+	}
+	if cfg.ReconcilerEVMMinConf != 1 {
+		t.Fatalf("expected default evm min confirmations 1, got %d", cfg.ReconcilerEVMMinConf)
+	}
 }
 
 func TestLoadConfigRequiresDatabaseURL(t *testing.T) {
@@ -314,6 +320,8 @@ func TestLoadConfigParsesReconcilerConfig(t *testing.T) {
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_WORKER_ID", "reconciler-a")
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS", "8000")
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS", "9500")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS", "2")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS", "3")
 	t.Setenv("PAYMENT_REQUEST_EVM_RPC_URLS_JSON", `{"local":"http://eth-node:8545"}`)
 
 	cfg, cfgErr := LoadConfig()
@@ -340,6 +348,12 @@ func TestLoadConfigParsesReconcilerConfig(t *testing.T) {
 	}
 	if cfg.ReconcilerConfirmedBPS != 9500 {
 		t.Fatalf("expected confirmed bps 9500, got %d", cfg.ReconcilerConfirmedBPS)
+	}
+	if cfg.ReconcilerBTCMinConf != 2 {
+		t.Fatalf("expected btc min confirmations 2, got %d", cfg.ReconcilerBTCMinConf)
+	}
+	if cfg.ReconcilerEVMMinConf != 3 {
+		t.Fatalf("expected evm min confirmations 3, got %d", cfg.ReconcilerEVMMinConf)
 	}
 	if cfg.EVMRPCURLs["local"] != "http://eth-node:8545" {
 		t.Fatalf("expected local evm rpc url to be parsed")
@@ -484,6 +498,52 @@ func TestLoadConfigRejectsInvalidReconcilerConfirmedThresholdBPS(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID" {
 		t.Fatalf("expected CONFIG_RECONCILER_CONFIRMED_THRESHOLD_BPS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidBTCMinConfirmations(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS", "0")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_RECONCILER_BTC_MIN_CONFIRMATIONS_INVALID" {
+		t.Fatalf("expected CONFIG_RECONCILER_BTC_MIN_CONFIRMATIONS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidEVMMinConfirmations(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS", "not-a-number")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_RECONCILER_EVM_MIN_CONFIRMATIONS_INVALID" {
+		t.Fatalf("expected CONFIG_RECONCILER_EVM_MIN_CONFIRMATIONS_INVALID, got %s", cfgErr.Code)
 	}
 }
 

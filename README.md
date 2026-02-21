@@ -197,26 +197,28 @@ make chain-down-all
 
 ## Configuration
 
-| Variable                                                 | Required     | Default            | Description                                                                                                                                                      |
-| -------------------------------------------------------- | ------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                           | Yes          | none               | PostgreSQL DSN                                                                                                                                                   |
-| `PORT`                                                   | No           | `8080`             | HTTP listen port                                                                                                                                                 |
-| `OPENAPI_SPEC_PATH`                                      | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                |
-| `PAYMENT_REQUEST_ALLOCATION_MODE`                        | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                       |
-| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported) |
-| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                           |
-| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No           | `[]`               | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                           |
-| `PAYMENT_REQUEST_RECONCILER_ENABLED`                     | No           | `false`            | Enable background chain reconciler worker                                                                                                                        |
-| `PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS`       | No           | `15`               | Reconciler polling interval in seconds                                                                                                                           |
-| `PAYMENT_REQUEST_RECONCILER_BATCH_SIZE`                  | No           | `100`              | Max open payment requests processed per cycle                                                                                                                    |
-| `PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS`               | No           | `30`               | Lease duration for claimed open requests (used for multi-replica work partition and crash recovery)                                                              |
-| `PAYMENT_REQUEST_RECONCILER_WORKER_ID`                   | No           | hostname+pid       | Optional worker identity override; default is generated from runtime host/process                                                                                |
-| `PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS`      | No           | `10000`            | Detected threshold in bps (1-10000), must be `<= PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`                                                             |
-| `PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`     | No           | `10000`            | Confirmed threshold in bps (1-10000)                                                                                                                             |
-| `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No           | empty              | BTC Esplora-compatible API base URL (must support `/address/{address}` with `chain_stats`/`mempool_stats`)                                                       |
-| `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No           | `{}`               | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                    |
-| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                         |
-| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                |
+| Variable                                                 | Required     | Default            | Description                                                                                                                                                          |
+| -------------------------------------------------------- | ------------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                           | Yes          | none               | PostgreSQL DSN                                                                                                                                                       |
+| `PORT`                                                   | No           | `8080`             | HTTP listen port                                                                                                                                                     |
+| `OPENAPI_SPEC_PATH`                                      | No           | `api/openapi.yaml` | OpenAPI file path                                                                                                                                                    |
+| `PAYMENT_REQUEST_ALLOCATION_MODE`                        | No           | `devtest`          | Wallet allocation mode (`devtest`, `prod`)                                                                                                                           |
+| `PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON`                   | Devtest only | none               | Keyset JSON (preferred: `{"chain":{"network":{"keyset_id":"...","extended_public_key":"...","expected_index0_address":"..."}}}`; legacy formats still supported)     |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET`                | Devtest only | none               | HMAC secret used for key material hash (`hmac-sha256`)                                                                                                               |
+| `PAYMENT_REQUEST_KEYSET_HASH_HMAC_PREVIOUS_SECRETS_JSON` | No           | `[]`               | Optional JSON string array of previous HMAC secrets used only for hash matching during secret rotation                                                               |
+| `PAYMENT_REQUEST_RECONCILER_ENABLED`                     | No           | `false`            | Enable background chain reconciler worker                                                                                                                            |
+| `PAYMENT_REQUEST_RECONCILER_POLL_INTERVAL_SECONDS`       | No           | `15`               | Reconciler polling interval in seconds                                                                                                                               |
+| `PAYMENT_REQUEST_RECONCILER_BATCH_SIZE`                  | No           | `100`              | Max open payment requests processed per cycle                                                                                                                        |
+| `PAYMENT_REQUEST_RECONCILER_LEASE_SECONDS`               | No           | `30`               | Lease duration for claimed open requests (used for multi-replica work partition and crash recovery)                                                                  |
+| `PAYMENT_REQUEST_RECONCILER_WORKER_ID`                   | No           | hostname+pid       | Optional worker identity override; default is generated from runtime host/process                                                                                    |
+| `PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS`      | No           | `10000`            | Detected threshold in bps (1-10000), must be `<= PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`                                                                 |
+| `PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS`     | No           | `10000`            | Confirmed threshold in bps (1-10000)                                                                                                                                 |
+| `PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS`       | No           | `1`                | Minimum BTC confirmations required before counting amount toward `confirmed`                                                                                         |
+| `PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS`       | No           | `1`                | Minimum EVM confirmations required before counting amount toward `confirmed` (applies to ETH and USDT)                                                               |
+| `PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL`                   | No           | empty              | BTC Esplora-compatible API base URL (must support `/address/{address}`; and when `BTC_MIN_CONFIRMATIONS>1`, also `/address/{address}/utxo` and `/blocks/tip/height`) |
+| `PAYMENT_REQUEST_EVM_RPC_URLS_JSON`                      | No           | `{}`               | JSON object of EVM RPC URLs keyed by network (for example `{\"local\":\"http://host.docker.internal:8545\"}`)                                                        |
+| `PAYMENT_REQUEST_DEVTEST_ALLOW_MAINNET`                  | No           | `false`            | Allow mainnet allocation in devtest mode                                                                                                                             |
+| `PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON`         | No           | built-in allowlist | Override address-scheme allowlist                                                                                                                                    |
 
 ## API Quick Usage
 
@@ -280,6 +282,19 @@ make service-up \
   SERVICE_RECONCILER_CONFIRMED_THRESHOLD_BPS=10000 \
   SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
 ```
+
+若你希望 `confirmed` 需達到指定確認深度（例如 BTC=2, EVM=3）：
+
+```bash
+make service-up \
+  SERVICE_RECONCILER_ENABLED=true \
+  SERVICE_RECONCILER_REPLICAS=2 \
+  SERVICE_RECONCILER_BTC_MIN_CONFIRMATIONS=2 \
+  SERVICE_RECONCILER_EVM_MIN_CONFIRMATIONS=3 \
+  SERVICE_EVM_RPC_URLS_JSON='{"local":"http://host.docker.internal:8545"}'
+```
+
+其中 BTC 的成功確認區塊數就是 `PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS`；例如設為 `2`，代表至少 2 confirmations 才會進 `confirmed`。
 
 若要同時啟用 BTC 監聽，請另外提供 Esplora-compatible endpoint，例如：
 
