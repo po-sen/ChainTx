@@ -90,6 +90,21 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.WebhookRetryBudget != 0 {
 		t.Fatalf("expected default webhook retry budget 0, got %d", cfg.WebhookRetryBudget)
 	}
+	if cfg.WebhookAlertEnabled {
+		t.Fatalf("expected webhook alert disabled by default")
+	}
+	if cfg.WebhookAlertCooldown.Seconds() != 300 {
+		t.Fatalf("expected default webhook alert cooldown 300s, got %s", cfg.WebhookAlertCooldown)
+	}
+	if cfg.WebhookAlertFailedCount != 0 {
+		t.Fatalf("expected default webhook alert failed count threshold 0, got %d", cfg.WebhookAlertFailedCount)
+	}
+	if cfg.WebhookAlertPendingReady != 0 {
+		t.Fatalf("expected default webhook alert pending ready threshold 0, got %d", cfg.WebhookAlertPendingReady)
+	}
+	if cfg.WebhookAlertOldestAgeSec != 0 {
+		t.Fatalf("expected default webhook alert oldest age threshold 0, got %d", cfg.WebhookAlertOldestAgeSec)
+	}
 	if len(cfg.WebhookOpsAdminKeys) != 0 {
 		t.Fatalf("expected default webhook ops admin keys empty, got %d", len(cfg.WebhookOpsAdminKeys))
 	}
@@ -631,6 +646,11 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS", "120")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS", "1800")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET", "4")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_ENABLED", "true")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_COOLDOWN_SECONDS", "90")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_FAILED_COUNT_THRESHOLD", "11")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_PENDING_READY_THRESHOLD", "12")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_OLDEST_PENDING_AGE_SECONDS", "13")
 	t.Setenv("PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON", `["ops-key-a","ops-key-b"]`)
 
 	cfg, cfgErr := LoadConfig()
@@ -678,6 +698,21 @@ func TestLoadConfigParsesWebhookConfig(t *testing.T) {
 	}
 	if cfg.WebhookRetryBudget != 4 {
 		t.Fatalf("expected webhook retry budget 4, got %d", cfg.WebhookRetryBudget)
+	}
+	if !cfg.WebhookAlertEnabled {
+		t.Fatalf("expected webhook alert enabled")
+	}
+	if cfg.WebhookAlertCooldown.Seconds() != 90 {
+		t.Fatalf("expected webhook alert cooldown 90s, got %s", cfg.WebhookAlertCooldown)
+	}
+	if cfg.WebhookAlertFailedCount != 11 {
+		t.Fatalf("expected webhook alert failed count threshold 11, got %d", cfg.WebhookAlertFailedCount)
+	}
+	if cfg.WebhookAlertPendingReady != 12 {
+		t.Fatalf("expected webhook alert pending ready threshold 12, got %d", cfg.WebhookAlertPendingReady)
+	}
+	if cfg.WebhookAlertOldestAgeSec != 13 {
+		t.Fatalf("expected webhook alert oldest age threshold 13, got %d", cfg.WebhookAlertOldestAgeSec)
 	}
 	if len(cfg.WebhookOpsAdminKeys) != 2 {
 		t.Fatalf("expected webhook ops admin keys size 2, got %d", len(cfg.WebhookOpsAdminKeys))
@@ -748,6 +783,66 @@ func TestLoadConfigRejectsInvalidWebhookRetryBudget(t *testing.T) {
 	}
 	if cfgErr.Code != "CONFIG_WEBHOOK_RETRY_BUDGET_INVALID" {
 		t.Fatalf("expected CONFIG_WEBHOOK_RETRY_BUDGET_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookAlertEnabled(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_ENABLED", "not-a-bool")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_ALERT_ENABLED_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_ALERT_ENABLED_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookAlertCooldown(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_COOLDOWN_SECONDS", "0")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_ALERT_COOLDOWN_SECONDS_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_ALERT_COOLDOWN_SECONDS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidWebhookAlertThreshold(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_PENDING_READY_THRESHOLD", "-1")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_ALERT_PENDING_READY_THRESHOLD_INVALID" {
+		t.Fatalf("expected CONFIG_WEBHOOK_ALERT_PENDING_READY_THRESHOLD_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsWebhookAlertEnabledWithoutThreshold(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{"ks_btc_testnet":"tpubDC2pzLGKv5DoHtRoYjJsbgESSzFqc3mtPzahMMqhH89bqqHot28MFUHkUECJrBGFb2KPQZUrApq4Ti6Y69S2K3snrsT8E5Zjt1GqTMj7xn5"}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_WEBHOOK_ALERT_ENABLED", "true")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_WEBHOOK_ALERT_THRESHOLD_REQUIRED" {
+		t.Fatalf("expected CONFIG_WEBHOOK_ALERT_THRESHOLD_REQUIRED, got %s", cfgErr.Code)
 	}
 }
 

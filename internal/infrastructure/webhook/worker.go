@@ -10,17 +10,17 @@ import (
 )
 
 type Worker struct {
-	enabled        bool
-	pollInterval   time.Duration
-	batchSize      int
-	workerID       string
-	leaseDuration  time.Duration
-	initialBackoff time.Duration
-	maxBackoff     time.Duration
-	retryJitterBPS int
-	retryBudget    int
-	useCase        portsin.DispatchWebhookEventsUseCase
-	logger         *log.Logger
+	enabled         bool
+	pollInterval    time.Duration
+	batchSize       int
+	workerID        string
+	leaseDuration   time.Duration
+	initialBackoff  time.Duration
+	maxBackoff      time.Duration
+	retryJitterBPS  int
+	retryBudget     int
+	dispatchUseCase portsin.DispatchWebhookEventsUseCase
+	logger          *log.Logger
 }
 
 func NewWorker(
@@ -33,21 +33,21 @@ func NewWorker(
 	maxBackoff time.Duration,
 	retryJitterBPS int,
 	retryBudget int,
-	useCase portsin.DispatchWebhookEventsUseCase,
+	dispatchUseCase portsin.DispatchWebhookEventsUseCase,
 	logger *log.Logger,
 ) *Worker {
 	return &Worker{
-		enabled:        enabled,
-		pollInterval:   pollInterval,
-		batchSize:      batchSize,
-		workerID:       workerID,
-		leaseDuration:  leaseDuration,
-		initialBackoff: initialBackoff,
-		maxBackoff:     maxBackoff,
-		retryJitterBPS: retryJitterBPS,
-		retryBudget:    retryBudget,
-		useCase:        useCase,
-		logger:         logger,
+		enabled:         enabled,
+		pollInterval:    pollInterval,
+		batchSize:       batchSize,
+		workerID:        workerID,
+		leaseDuration:   leaseDuration,
+		initialBackoff:  initialBackoff,
+		maxBackoff:      maxBackoff,
+		retryJitterBPS:  retryJitterBPS,
+		retryBudget:     retryBudget,
+		dispatchUseCase: dispatchUseCase,
+		logger:          logger,
 	}
 }
 
@@ -56,7 +56,7 @@ func (w *Worker) Enabled() bool {
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	if w == nil || !w.enabled || w.useCase == nil {
+	if w == nil || !w.enabled || w.dispatchUseCase == nil {
 		return
 	}
 
@@ -85,7 +85,7 @@ func (w *Worker) Start(ctx context.Context) {
 
 func (w *Worker) runCycle(ctx context.Context) {
 	startedAt := time.Now().UTC()
-	output, appErr := w.useCase.Execute(ctx, dto.DispatchWebhookEventsCommand{
+	output, appErr := w.dispatchUseCase.Execute(ctx, dto.DispatchWebhookEventsCommand{
 		Now:            startedAt,
 		BatchSize:      w.batchSize,
 		WorkerID:       w.workerID,

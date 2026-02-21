@@ -13,7 +13,7 @@ import (
 )
 
 func TestWorkerDisabled(t *testing.T) {
-	fakeUseCase := &fakeDispatchUseCase{}
+	fakeDispatchUseCase := &fakeDispatchUseCase{}
 	worker := NewWorker(
 		false,
 		10*time.Millisecond,
@@ -24,7 +24,7 @@ func TestWorkerDisabled(t *testing.T) {
 		60*time.Second,
 		2000,
 		3,
-		fakeUseCase,
+		fakeDispatchUseCase,
 		nil,
 	)
 
@@ -32,13 +32,13 @@ func TestWorkerDisabled(t *testing.T) {
 	defer cancel()
 	worker.Start(ctx)
 
-	if fakeUseCase.calls() != 0 {
-		t.Fatalf("expected no calls for disabled worker, got %d", fakeUseCase.calls())
+	if fakeDispatchUseCase.calls() != 0 {
+		t.Fatalf("expected no calls for disabled worker, got %d", fakeDispatchUseCase.calls())
 	}
 }
 
 func TestWorkerRunsCycleWithRetryConfig(t *testing.T) {
-	fakeUseCase := &fakeDispatchUseCase{}
+	fakeDispatchUseCase := &fakeDispatchUseCase{}
 	worker := NewWorker(
 		true,
 		10*time.Millisecond,
@@ -49,7 +49,7 @@ func TestWorkerRunsCycleWithRetryConfig(t *testing.T) {
 		60*time.Second,
 		1500,
 		2,
-		fakeUseCase,
+		fakeDispatchUseCase,
 		nil,
 	)
 
@@ -61,10 +61,10 @@ func TestWorkerRunsCycleWithRetryConfig(t *testing.T) {
 
 	worker.Start(ctx)
 
-	if fakeUseCase.calls() == 0 {
+	if fakeDispatchUseCase.calls() == 0 {
 		t.Fatalf("expected at least one cycle call")
 	}
-	last := fakeUseCase.lastCommand()
+	last := fakeDispatchUseCase.lastCommand()
 	if last.WorkerID != "worker-a" {
 		t.Fatalf("expected worker id worker-a, got %s", last.WorkerID)
 	}

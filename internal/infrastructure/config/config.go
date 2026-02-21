@@ -36,6 +36,8 @@ const (
 	defaultWebhookMaxBackoff        = 300 * time.Second
 	defaultWebhookRetryJitterBPS    = 0
 	defaultWebhookRetryBudget       = 0
+	defaultWebhookAlertCooldown     = 300 * time.Second
+	defaultWebhookAlertThreshold    = int64(0)
 )
 
 const addressSchemeAllowListEnv = "PAYMENT_REQUEST_ADDRESS_SCHEME_ALLOW_LIST_JSON"
@@ -64,6 +66,11 @@ const webhookInitialBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_INITIAL_BACKOFF
 const webhookMaxBackoffSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_MAX_BACKOFF_SECONDS"
 const webhookRetryJitterBPSEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_JITTER_BPS"
 const webhookRetryBudgetEnv = "PAYMENT_REQUEST_WEBHOOK_RETRY_BUDGET"
+const webhookAlertEnabledEnv = "PAYMENT_REQUEST_WEBHOOK_ALERT_ENABLED"
+const webhookAlertCooldownSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_ALERT_COOLDOWN_SECONDS"
+const webhookAlertFailedCountThresholdEnv = "PAYMENT_REQUEST_WEBHOOK_ALERT_FAILED_COUNT_THRESHOLD"
+const webhookAlertPendingReadyThresholdEnv = "PAYMENT_REQUEST_WEBHOOK_ALERT_PENDING_READY_THRESHOLD"
+const webhookAlertOldestPendingAgeSecondsEnv = "PAYMENT_REQUEST_WEBHOOK_ALERT_OLDEST_PENDING_AGE_SECONDS"
 const webhookOpsAdminKeysEnv = "PAYMENT_REQUEST_WEBHOOK_OPS_ADMIN_KEYS_JSON"
 const btcExploraBaseURLEnv = "PAYMENT_REQUEST_BTC_ESPLORA_BASE_URL"
 const evmRPCURLsEnv = "PAYMENT_REQUEST_EVM_RPC_URLS_JSON"
@@ -120,6 +127,11 @@ type Config struct {
 	WebhookMaxBackoff        time.Duration
 	WebhookRetryJitterBPS    int
 	WebhookRetryBudget       int
+	WebhookAlertEnabled      bool
+	WebhookAlertCooldown     time.Duration
+	WebhookAlertFailedCount  int64
+	WebhookAlertPendingReady int64
+	WebhookAlertOldestAgeSec int64
 	WebhookOpsAdminKeys      []string
 	BTCExploraBaseURL        string
 	EVMRPCURLs               map[string]string
@@ -273,6 +285,11 @@ func LoadConfig() (Config, *ConfigError) {
 		WebhookMaxBackoff:        webhookCfg.MaxBackoff,
 		WebhookRetryJitterBPS:    webhookCfg.RetryJitterBPS,
 		WebhookRetryBudget:       webhookCfg.RetryBudget,
+		WebhookAlertEnabled:      webhookCfg.AlertEnabled,
+		WebhookAlertCooldown:     webhookCfg.AlertCooldown,
+		WebhookAlertFailedCount:  webhookCfg.AlertFailedCountThreshold,
+		WebhookAlertPendingReady: webhookCfg.AlertPendingReadyThreshold,
+		WebhookAlertOldestAgeSec: webhookCfg.AlertOldestPendingAgeSeconds,
 		WebhookOpsAdminKeys:      webhookOpsAdminKeys,
 		BTCExploraBaseURL:        btcExploraBaseURL,
 		EVMRPCURLs:               evmRPCURLs,
@@ -631,17 +648,22 @@ type reconcilerRuntimeConfig struct {
 }
 
 type webhookRuntimeConfig struct {
-	Enabled        bool
-	HMACSecret     string
-	PollInterval   time.Duration
-	BatchSize      int
-	LeaseDuration  time.Duration
-	Timeout        time.Duration
-	MaxAttempts    int
-	InitialBackoff time.Duration
-	MaxBackoff     time.Duration
-	RetryJitterBPS int
-	RetryBudget    int
+	Enabled                      bool
+	HMACSecret                   string
+	PollInterval                 time.Duration
+	BatchSize                    int
+	LeaseDuration                time.Duration
+	Timeout                      time.Duration
+	MaxAttempts                  int
+	InitialBackoff               time.Duration
+	MaxBackoff                   time.Duration
+	RetryJitterBPS               int
+	RetryBudget                  int
+	AlertEnabled                 bool
+	AlertCooldown                time.Duration
+	AlertFailedCountThreshold    int64
+	AlertPendingReadyThreshold   int64
+	AlertOldestPendingAgeSeconds int64
 }
 
 func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
@@ -886,18 +908,81 @@ func parseWebhookConfig() (webhookRuntimeConfig, *ConfigError) {
 		retryBudget = parsed
 	}
 
+	alertEnabled := false
+	rawAlertEnabled := strings.TrimSpace(os.Getenv(webhookAlertEnabledEnv))
+	if rawAlertEnabled != "" {
+		parsed, err := strconv.ParseBool(rawAlertEnabled)
+		if err != nil {
+			return webhookRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_WEBHOOK_ALERT_ENABLED_INVALID",
+				Message: webhookAlertEnabledEnv + " must be a boolean",
+			}
+		}
+		alertEnabled = parsed
+	}
+	alertCooldown, alertCooldownErr := parsePositiveSeconds(
+		webhookAlertCooldownSecondsEnv,
+		"CONFIG_WEBHOOK_ALERT_COOLDOWN_SECONDS_INVALID",
+		" must be a positive integer in seconds",
+		defaultWebhookAlertCooldown,
+	)
+	if alertCooldownErr != nil {
+		return webhookRuntimeConfig{}, alertCooldownErr
+	}
+	alertFailedCountThreshold, alertFailedCountErr := parseNonNegativeInt64(
+		webhookAlertFailedCountThresholdEnv,
+		"CONFIG_WEBHOOK_ALERT_FAILED_COUNT_THRESHOLD_INVALID",
+		" must be a non-negative integer",
+		defaultWebhookAlertThreshold,
+	)
+	if alertFailedCountErr != nil {
+		return webhookRuntimeConfig{}, alertFailedCountErr
+	}
+	alertPendingReadyThreshold, alertPendingReadyErr := parseNonNegativeInt64(
+		webhookAlertPendingReadyThresholdEnv,
+		"CONFIG_WEBHOOK_ALERT_PENDING_READY_THRESHOLD_INVALID",
+		" must be a non-negative integer",
+		defaultWebhookAlertThreshold,
+	)
+	if alertPendingReadyErr != nil {
+		return webhookRuntimeConfig{}, alertPendingReadyErr
+	}
+	alertOldestPendingAgeSeconds, alertOldestPendingAgeErr := parseNonNegativeInt64(
+		webhookAlertOldestPendingAgeSecondsEnv,
+		"CONFIG_WEBHOOK_ALERT_OLDEST_PENDING_AGE_SECONDS_INVALID",
+		" must be a non-negative integer",
+		defaultWebhookAlertThreshold,
+	)
+	if alertOldestPendingAgeErr != nil {
+		return webhookRuntimeConfig{}, alertOldestPendingAgeErr
+	}
+	if alertEnabled &&
+		alertFailedCountThreshold == 0 &&
+		alertPendingReadyThreshold == 0 &&
+		alertOldestPendingAgeSeconds == 0 {
+		return webhookRuntimeConfig{}, &ConfigError{
+			Code:    "CONFIG_WEBHOOK_ALERT_THRESHOLD_REQUIRED",
+			Message: "at least one webhook alert threshold must be > 0 when webhook alert is enabled",
+		}
+	}
+
 	return webhookRuntimeConfig{
-		Enabled:        enabled,
-		HMACSecret:     hmacSecret,
-		PollInterval:   pollInterval,
-		BatchSize:      batchSize,
-		LeaseDuration:  leaseDuration,
-		Timeout:        timeout,
-		MaxAttempts:    maxAttempts,
-		InitialBackoff: initialBackoff,
-		MaxBackoff:     maxBackoff,
-		RetryJitterBPS: retryJitterBPS,
-		RetryBudget:    retryBudget,
+		Enabled:                      enabled,
+		HMACSecret:                   hmacSecret,
+		PollInterval:                 pollInterval,
+		BatchSize:                    batchSize,
+		LeaseDuration:                leaseDuration,
+		Timeout:                      timeout,
+		MaxAttempts:                  maxAttempts,
+		InitialBackoff:               initialBackoff,
+		MaxBackoff:                   maxBackoff,
+		RetryJitterBPS:               retryJitterBPS,
+		RetryBudget:                  retryBudget,
+		AlertEnabled:                 alertEnabled,
+		AlertCooldown:                alertCooldown,
+		AlertFailedCountThreshold:    alertFailedCountThreshold,
+		AlertPendingReadyThreshold:   alertPendingReadyThreshold,
+		AlertOldestPendingAgeSeconds: alertOldestPendingAgeSeconds,
 	}, nil
 }
 
@@ -971,6 +1056,27 @@ func parsePositiveInt(
 	}
 	parsed, err := strconv.Atoi(raw)
 	if err != nil || parsed <= 0 {
+		return 0, &ConfigError{
+			Code:    errorCode,
+			Message: envKey + messageSuffix,
+		}
+	}
+	return parsed, nil
+}
+
+func parseNonNegativeInt64(
+	envKey string,
+	errorCode string,
+	messageSuffix string,
+	defaultValue int64,
+) (int64, *ConfigError) {
+	value := defaultValue
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return value, nil
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed < 0 {
 		return 0, &ConfigError{
 			Code:    errorCode,
 			Message: envKey + messageSuffix,

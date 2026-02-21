@@ -26,6 +26,7 @@ import (
 	"chaintx/internal/infrastructure/httpserver"
 	"chaintx/internal/infrastructure/reconciler"
 	"chaintx/internal/infrastructure/webhook"
+	"chaintx/internal/infrastructure/webhookalert"
 )
 
 type ServerContainer struct {
@@ -45,6 +46,12 @@ type WebhookDispatcherContainer struct {
 	Database                     *sql.DB
 	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
 	WebhookWorker                *webhook.Worker
+}
+
+type WebhookAlertWorkerContainer struct {
+	Database                     *sql.DB
+	InitializePersistenceUseCase portsin.InitializePersistenceUseCase
+	WebhookAlertWorker           *webhookalert.Worker
 }
 
 type runtimeDependencies struct {
@@ -204,6 +211,33 @@ func BuildWebhookDispatcher(cfg config.Config, logger *log.Logger) (WebhookDispa
 		Database:                     runtimeDeps.databasePool,
 		InitializePersistenceUseCase: runtimeDeps.initializePersistenceUseCase,
 		WebhookWorker:                webhookWorker,
+	}, nil
+}
+
+func BuildWebhookAlertWorker(cfg config.Config, logger *log.Logger) (WebhookAlertWorkerContainer, error) {
+	runtimeDeps := buildRuntimeDependencies(cfg, logger)
+	webhookOutboxRepository := postgresqlwebhookoutbox.NewRepository(runtimeDeps.databasePool)
+	getWebhookOutboxOverviewUseCase := use_cases.NewGetWebhookOutboxOverviewUseCase(
+		webhookOutboxRepository,
+	)
+	alertWorker := webhookalert.NewWorker(
+		cfg.WebhookAlertEnabled,
+		cfg.WebhookPollInterval,
+		cfg.WebhookWorkerID,
+		getWebhookOutboxOverviewUseCase,
+		webhookalert.AlertConfig{
+			Enabled:                  cfg.WebhookAlertEnabled,
+			Cooldown:                 cfg.WebhookAlertCooldown,
+			FailedCountThreshold:     cfg.WebhookAlertFailedCount,
+			PendingReadyThreshold:    cfg.WebhookAlertPendingReady,
+			OldestPendingAgeSecLimit: cfg.WebhookAlertOldestAgeSec,
+		},
+		logger,
+	)
+	return WebhookAlertWorkerContainer{
+		Database:                     runtimeDeps.databasePool,
+		InitializePersistenceUseCase: runtimeDeps.initializePersistenceUseCase,
+		WebhookAlertWorker:           alertWorker,
 	}, nil
 }
 
