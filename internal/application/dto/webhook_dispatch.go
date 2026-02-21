@@ -32,10 +32,11 @@ type PendingWebhookOutboxEvent struct {
 }
 
 type SendWebhookEventInput struct {
-	EventID        string
-	EventType      string
-	DestinationURL string
-	Payload        []byte
+	EventID         string
+	EventType       string
+	DeliveryAttempt int
+	DestinationURL  string
+	Payload         []byte
 }
 
 type SendWebhookEventOutput struct {

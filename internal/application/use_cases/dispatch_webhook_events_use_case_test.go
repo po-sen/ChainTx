@@ -67,6 +67,48 @@ func TestDispatchWebhookEventsUseCaseMarksDeliveredOnSuccess(t *testing.T) {
 	}
 }
 
+func TestDispatchWebhookEventsUseCasePassesDeliveryAttempt(t *testing.T) {
+	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
+	repo := &fakeWebhookOutboxRepository{
+		claimed: []dto.PendingWebhookOutboxEvent{
+			{
+				ID:             10,
+				EventID:        "evt_10",
+				EventType:      "payment_request.status_changed",
+				DestinationURL: "https://hooks.example.com/evt_10",
+				Payload:        []byte(`{"event_id":"evt_10"}`),
+				Attempts:       2,
+				MaxAttempts:    5,
+			},
+		},
+	}
+	gateway := &fakeWebhookEventGateway{
+		results: map[string]dto.SendWebhookEventOutput{
+			"evt_10": {StatusCode: 204},
+		},
+	}
+	useCase := NewDispatchWebhookEventsUseCase(repo, gateway)
+
+	_, appErr := useCase.Execute(context.Background(), dto.DispatchWebhookEventsCommand{
+		Now:            now,
+		BatchSize:      10,
+		WorkerID:       "webhook-worker-a",
+		LeaseDuration:  30 * time.Second,
+		InitialBackoff: 5 * time.Second,
+		MaxBackoff:     60 * time.Second,
+	})
+	if appErr != nil {
+		t.Fatalf("expected no error, got %+v", appErr)
+	}
+	inputs := gateway.sentInputs()
+	if len(inputs) != 1 {
+		t.Fatalf("expected one webhook send input, got %d", len(inputs))
+	}
+	if inputs[0].DeliveryAttempt != 3 {
+		t.Fatalf("expected delivery attempt 3, got %d", inputs[0].DeliveryAttempt)
+	}
+}
+
 func TestDispatchWebhookEventsUseCaseRetriesOnFailure(t *testing.T) {
 	now := time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC)
 	repo := &fakeWebhookOutboxRepository{
@@ -406,15 +448,21 @@ func (f *fakeWebhookOutboxRepository) renewCount() int {
 }
 
 type fakeWebhookEventGateway struct {
+	mu        sync.Mutex
 	results   map[string]dto.SendWebhookEventOutput
 	errors    map[string]*apperrors.AppError
 	sendDelay time.Duration
+	inputs    []dto.SendWebhookEventInput
 }
 
 func (f *fakeWebhookEventGateway) SendWebhookEvent(
 	_ context.Context,
 	input dto.SendWebhookEventInput,
 ) (dto.SendWebhookEventOutput, *apperrors.AppError) {
+	f.mu.Lock()
+	f.inputs = append(f.inputs, input)
+	f.mu.Unlock()
+
 	if f.sendDelay > 0 {
 		time.Sleep(f.sendDelay)
 	}
@@ -429,4 +477,12 @@ func (f *fakeWebhookEventGateway) SendWebhookEvent(
 		}
 	}
 	return dto.SendWebhookEventOutput{StatusCode: 200}, nil
+}
+
+func (f *fakeWebhookEventGateway) sentInputs() []dto.SendWebhookEventInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]dto.SendWebhookEventInput, len(f.inputs))
+	copy(out, f.inputs)
+	return out
 }

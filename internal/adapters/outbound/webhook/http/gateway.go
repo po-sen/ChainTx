@@ -1,8 +1,10 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -20,6 +22,8 @@ import (
 const (
 	defaultHTTPTimeout = 5 * time.Second
 	maxErrorBodyBytes  = 1024
+	signatureVersionV1 = "v1"
+	nonceByteLength    = 16
 )
 
 type Config struct {
@@ -75,6 +79,22 @@ func (g *Gateway) SendWebhookEvent(
 			nil,
 		)
 	}
+	eventID := strings.TrimSpace(input.EventID)
+	if eventID == "" {
+		return dto.SendWebhookEventOutput{}, apperrors.NewValidation(
+			"webhook_event_id_missing",
+			"webhook event id is required",
+			nil,
+		)
+	}
+	eventType := strings.TrimSpace(input.EventType)
+	if eventType == "" {
+		return dto.SendWebhookEventOutput{}, apperrors.NewValidation(
+			"webhook_event_type_missing",
+			"webhook event type is required",
+			nil,
+		)
+	}
 	destinationURL := strings.TrimSpace(input.DestinationURL)
 	if destinationURL == "" {
 		return dto.SendWebhookEventOutput{}, apperrors.NewValidation(
@@ -85,9 +105,22 @@ func (g *Gateway) SendWebhookEvent(
 	}
 
 	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
-	signature := webhookSignature(g.hmacSecret, timestamp, body)
+	nonce, nonceErr := webhookNonce()
+	if nonceErr != nil {
+		return dto.SendWebhookEventOutput{}, apperrors.NewInternal(
+			"webhook_nonce_generation_failed",
+			"failed to generate webhook nonce",
+			map[string]any{"error": nonceErr.Error()},
+		)
+	}
+	legacySignature := webhookLegacySignature(g.hmacSecret, timestamp, body)
+	signatureV1 := webhookV1Signature(g.hmacSecret, timestamp, nonce, eventID, eventType, body)
+	deliveryAttempt := input.DeliveryAttempt
+	if deliveryAttempt <= 0 {
+		deliveryAttempt = 1
+	}
 
-	request, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodPost, destinationURL, strings.NewReader(string(body)))
+	request, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodPost, destinationURL, bytes.NewReader(body))
 	if err != nil {
 		return dto.SendWebhookEventOutput{}, apperrors.NewInternal(
 			"webhook_request_build_failed",
@@ -96,10 +129,15 @@ func (g *Gateway) SendWebhookEvent(
 		)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-ChainTx-Event-Id", strings.TrimSpace(input.EventID))
-	request.Header.Set("X-ChainTx-Event-Type", strings.TrimSpace(input.EventType))
+	request.Header.Set("X-ChainTx-Event-Id", eventID)
+	request.Header.Set("Idempotency-Key", eventID)
+	request.Header.Set("X-ChainTx-Event-Type", eventType)
+	request.Header.Set("X-ChainTx-Delivery-Attempt", strconv.Itoa(deliveryAttempt))
 	request.Header.Set("X-ChainTx-Timestamp", timestamp)
-	request.Header.Set("X-ChainTx-Signature", "sha256="+signature)
+	request.Header.Set("X-ChainTx-Nonce", nonce)
+	request.Header.Set("X-ChainTx-Signature-Version", signatureVersionV1)
+	request.Header.Set("X-ChainTx-Signature-V1", "sha256="+signatureV1)
+	request.Header.Set("X-ChainTx-Signature", "sha256="+legacySignature)
 
 	response, err := g.client.Do(request)
 	if err != nil {
@@ -130,7 +168,15 @@ func (g *Gateway) SendWebhookEvent(
 	return dto.SendWebhookEventOutput{StatusCode: response.StatusCode}, nil
 }
 
-func webhookSignature(secret string, timestamp string, body []byte) string {
+func webhookNonce() (string, error) {
+	raw := make([]byte, nonceByteLength)
+	if _, err := cryptorand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+func webhookLegacySignature(secret string, timestamp string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(timestamp))
 	_, _ = mac.Write([]byte("."))
@@ -138,6 +184,41 @@ func webhookSignature(secret string, timestamp string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+func webhookV1Signature(
+	secret string,
+	timestamp string,
+	nonce string,
+	eventID string,
+	eventType string,
+	body []byte,
+) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write([]byte(nonce))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write([]byte(strings.TrimSpace(eventID)))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write([]byte(strings.TrimSpace(eventType)))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func BuildExpectedSignatureHeader(secret string, timestamp string, body []byte) string {
-	return fmt.Sprintf("sha256=%s", webhookSignature(secret, timestamp, body))
+	return fmt.Sprintf("sha256=%s", webhookLegacySignature(secret, timestamp, body))
+}
+
+func BuildExpectedSignatureV1Header(
+	secret string,
+	timestamp string,
+	nonce string,
+	eventID string,
+	eventType string,
+	body []byte,
+) string {
+	return fmt.Sprintf(
+		"sha256=%s",
+		webhookV1Signature(secret, timestamp, nonce, eventID, eventType, body),
+	)
 }

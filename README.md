@@ -332,9 +332,25 @@ make service-up \
 Webhook 請求會帶以下 headers：
 
 - `X-ChainTx-Event-Id`
+- `Idempotency-Key`（值等於 `X-ChainTx-Event-Id`）
 - `X-ChainTx-Event-Type`
+- `X-ChainTx-Delivery-Attempt`（`1` 起跳，retry 時遞增）
 - `X-ChainTx-Timestamp`
-- `X-ChainTx-Signature`（格式：`sha256=<hex>`，計算內容為 `timestamp + "." + body`）
+- `X-ChainTx-Nonce`（每次 delivery 嘗試都不同）
+- `X-ChainTx-Signature-Version`（目前為 `v1`）
+- `X-ChainTx-Signature-V1`（格式：`sha256=<hex>`）
+- `X-ChainTx-Signature`（legacy，格式：`sha256=<hex>`）
+
+`X-ChainTx-Signature-V1` 使用 `hmac-sha256`，簽章內容為：
+
+- `timestamp + "." + nonce + "." + event_id + "." + event_type + "." + body`
+
+下游接收方建議（實務上應視為必要）：
+
+1. 先驗證 `X-ChainTx-Signature-V1`（不要只驗證 legacy `X-ChainTx-Signature`）。
+2. 檢查 `X-ChainTx-Timestamp` 是否在容忍視窗內（例如 `±300s`）。
+3. 以 `(event_id, nonce)` 或 `nonce` 做短期去重，拒絕重複 nonce（防 replay）。
+4. 以 `Idempotency-Key`（即 `event_id`）做業務冪等，重送應回 `2xx` 並不可重複入帳。
 
 `webhook_url` 是建立 payment request 的必填欄位，且其 host 必須符合 `PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON`。`webhook-dispatcher` runtime 會強制檢查 `PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET`。
 

@@ -117,6 +117,10 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 			output.Skipped++
 			continue
 		}
+		deliveryAttempt := row.Attempts + 1
+		if deliveryAttempt <= 0 {
+			deliveryAttempt = 1
+		}
 
 		heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 		heartbeatErrCh := make(chan *apperrors.AppError, 1)
@@ -135,10 +139,11 @@ func (u *dispatchWebhookEventsUseCase) Execute(
 		}(row.EventID, row.ID)
 
 		sendOutput, sendErr := u.gateway.SendWebhookEvent(ctx, dto.SendWebhookEventInput{
-			EventID:        row.EventID,
-			EventType:      row.EventType,
-			DestinationURL: destinationURL,
-			Payload:        row.Payload,
+			EventID:         row.EventID,
+			EventType:       row.EventType,
+			DeliveryAttempt: deliveryAttempt,
+			DestinationURL:  destinationURL,
+			Payload:         row.Payload,
 		})
 		stopHeartbeat()
 		<-heartbeatDoneCh
