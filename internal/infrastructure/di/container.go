@@ -112,6 +112,7 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 		cfg.WebhookURLAllowList,
 	)
 	getPaymentRequestUseCase := use_cases.NewGetPaymentRequestUseCase(paymentRequestReadModel)
+	getPaymentRequestSettlementsUseCase := use_cases.NewGetPaymentRequestSettlementsUseCase(paymentRequestReadModel)
 	getWebhookOutboxOverviewUseCase := use_cases.NewGetWebhookOutboxOverviewUseCase(
 		webhookOutboxRepository,
 	)
@@ -136,6 +137,7 @@ func BuildServer(cfg config.Config, logger *log.Logger) (ServerContainer, error)
 	paymentRequestsController := controllers.NewPaymentRequestsController(
 		createPaymentRequestUseCase,
 		getPaymentRequestUseCase,
+		getPaymentRequestSettlementsUseCase,
 		logger,
 	)
 	webhookOutboxController := controllers.NewWebhookOutboxController(

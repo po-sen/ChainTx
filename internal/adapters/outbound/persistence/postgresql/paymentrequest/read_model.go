@@ -3,6 +3,7 @@ package paymentrequest
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	stderrors "errors"
 	"strings"
 
@@ -121,4 +122,132 @@ WHERE id = $1
 	resource.PaymentInstructions.Address = addressResponse
 
 	return resource, true, nil
+}
+
+func (r *ReadModel) ListSettlementsByPaymentRequestID(
+	ctx context.Context,
+	id string,
+) ([]dto.PaymentRequestSettlementResource, bool, *apperrors.AppError) {
+	const query = `
+WITH target_request AS (
+  SELECT id
+  FROM app.payment_requests
+  WHERE id = $1
+)
+SELECT
+  s.evidence_ref,
+  s.amount_minor::text,
+  s.confirmations,
+  s.block_height,
+  s.block_hash,
+  s.is_canonical,
+  s.metadata,
+  s.first_seen_at,
+  s.last_seen_at,
+  s.updated_at
+FROM target_request tr
+LEFT JOIN app.payment_request_settlements s
+  ON s.payment_request_id = tr.id
+ORDER BY s.first_seen_at ASC NULLS LAST, s.evidence_ref ASC NULLS LAST
+`
+
+	rows, err := r.db.QueryContext(ctx, query, id)
+	if err != nil {
+		return nil, false, apperrors.NewInternal(
+			"payment_request_query_failed",
+			"failed to query payment request settlements",
+			map[string]any{"error": err.Error(), "id": id},
+		)
+	}
+	defer rows.Close()
+
+	settlements := make([]dto.PaymentRequestSettlementResource, 0)
+	requestFound := false
+	for rows.Next() {
+		requestFound = true
+
+		var (
+			evidenceRef   sql.NullString
+			amountMinor   sql.NullString
+			confirmations sql.NullInt64
+			blockHeight   sql.NullInt64
+			blockHash     sql.NullString
+			isCanonical   sql.NullBool
+			metadataRaw   []byte
+			firstSeenAt   sql.NullTime
+			lastSeenAt    sql.NullTime
+			updatedAt     sql.NullTime
+		)
+
+		if scanErr := rows.Scan(
+			&evidenceRef,
+			&amountMinor,
+			&confirmations,
+			&blockHeight,
+			&blockHash,
+			&isCanonical,
+			&metadataRaw,
+			&firstSeenAt,
+			&lastSeenAt,
+			&updatedAt,
+		); scanErr != nil {
+			return nil, false, apperrors.NewInternal(
+				"payment_request_query_failed",
+				"failed to parse payment request settlement row",
+				map[string]any{"error": scanErr.Error(), "id": id},
+			)
+		}
+
+		if !evidenceRef.Valid {
+			continue
+		}
+
+		metadata := map[string]any{}
+		if len(metadataRaw) > 0 {
+			if decodeErr := json.Unmarshal(metadataRaw, &metadata); decodeErr != nil {
+				return nil, false, apperrors.NewInternal(
+					"payment_request_query_failed",
+					"failed to decode payment request settlement metadata",
+					map[string]any{"error": decodeErr.Error(), "id": id, "evidence_ref": evidenceRef.String},
+				)
+			}
+		}
+
+		item := dto.PaymentRequestSettlementResource{
+			EvidenceRef:   strings.TrimSpace(evidenceRef.String),
+			AmountMinor:   strings.TrimSpace(amountMinor.String),
+			Confirmations: int(confirmations.Int64),
+			IsCanonical:   isCanonical.Bool,
+			Metadata:      metadata,
+		}
+		if blockHeight.Valid {
+			value := blockHeight.Int64
+			item.BlockHeight = &value
+		}
+		if blockHash.Valid {
+			value := strings.TrimSpace(blockHash.String)
+			item.BlockHash = &value
+		}
+		if firstSeenAt.Valid {
+			item.FirstSeenAt = firstSeenAt.Time.UTC()
+		}
+		if lastSeenAt.Valid {
+			item.LastSeenAt = lastSeenAt.Time.UTC()
+		}
+		if updatedAt.Valid {
+			item.UpdatedAt = updatedAt.Time.UTC()
+		}
+
+		settlements = append(settlements, item)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, false, apperrors.NewInternal(
+			"payment_request_query_failed",
+			"failed while iterating payment request settlements",
+			map[string]any{"error": rowsErr.Error(), "id": id},
+		)
+	}
+
+	return settlements, requestFound, nil
 }

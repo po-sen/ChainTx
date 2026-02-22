@@ -131,8 +131,23 @@ func TestRouterHealthAndSwaggerRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("get payment request settlements route returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/payment-requests/pr_test/settlements", nil)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"payment_request_id":"pr_test"`) {
+			t.Fatalf("expected payment_request_id in body, got %s", rec.Body.String())
+		}
+	})
+
 	t.Run("webhook outbox overview route returns 200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/webhook-outbox/overview", nil)
+		req.Header.Set("Authorization", "Bearer ops-key")
 		rec := httptest.NewRecorder()
 
 		mux.ServeHTTP(rec, req)
@@ -144,6 +159,8 @@ func TestRouterHealthAndSwaggerRoutes(t *testing.T) {
 
 	t.Run("webhook outbox requeue route returns 200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/webhook-outbox/dlq/evt_1/requeue", nil)
+		req.Header.Set("Authorization", "Bearer ops-key")
+		req.Header.Set("X-Principal-ID", "ops-test")
 		rec := httptest.NewRecorder()
 
 		mux.ServeHTTP(rec, req)
@@ -179,6 +196,7 @@ func newTestRouter(openAPISpecPath string) *http.ServeMux {
 	paymentRequestsController := controllers.NewPaymentRequestsController(
 		stubCreatePaymentRequestUseCase{},
 		stubGetPaymentRequestUseCase{},
+		stubGetPaymentRequestSettlementsUseCase{},
 		logger,
 	)
 	webhookOutboxController := controllers.NewWebhookOutboxController(
@@ -259,6 +277,30 @@ func (stubGetPaymentRequestUseCase) Execute(_ context.Context, query dto.GetPaym
 			Address:         "bc1qexample",
 			AddressScheme:   "bip84_p2wpkh",
 			DerivationIndex: 1,
+		},
+	}, nil
+}
+
+type stubGetPaymentRequestSettlementsUseCase struct{}
+
+func (stubGetPaymentRequestSettlementsUseCase) Execute(
+	_ context.Context,
+	query dto.GetPaymentRequestSettlementsQuery,
+) (dto.PaymentRequestSettlementsResource, *apperrors.AppError) {
+	now := time.Unix(0, 0).UTC()
+	return dto.PaymentRequestSettlementsResource{
+		PaymentRequestID: query.ID,
+		Settlements: []dto.PaymentRequestSettlementResource{
+			{
+				EvidenceRef:   "btc:tx:1",
+				AmountMinor:   "1000",
+				Confirmations: 1,
+				IsCanonical:   true,
+				Metadata:      map[string]any{"source": "chain_stats"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				UpdatedAt:     now,
+			},
 		},
 	}, nil
 }

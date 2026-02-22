@@ -76,6 +76,10 @@ type GetPaymentRequestQuery struct {
 	ID string
 }
 
+type GetPaymentRequestSettlementsQuery struct {
+	ID string
+}
+
 type PaymentRequestResource struct {
 	ID                  string              `json:"id"`
 	Status              string              `json:"status"`
@@ -96,4 +100,22 @@ type PaymentInstructions struct {
 	TokenStandard   *string `json:"token_standard,omitempty"`
 	TokenContract   *string `json:"token_contract,omitempty"`
 	TokenDecimals   *int    `json:"token_decimals,omitempty"`
+}
+
+type PaymentRequestSettlementResource struct {
+	EvidenceRef   string         `json:"evidence_ref"`
+	AmountMinor   string         `json:"amount_minor"`
+	Confirmations int            `json:"confirmations"`
+	BlockHeight   *int64         `json:"block_height,omitempty"`
+	BlockHash     *string        `json:"block_hash,omitempty"`
+	IsCanonical   bool           `json:"is_canonical"`
+	Metadata      map[string]any `json:"metadata"`
+	FirstSeenAt   time.Time      `json:"first_seen_at"`
+	LastSeenAt    time.Time      `json:"last_seen_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+type PaymentRequestSettlementsResource struct {
+	PaymentRequestID string                             `json:"payment_request_id"`
+	Settlements      []PaymentRequestSettlementResource `json:"settlements"`
 }

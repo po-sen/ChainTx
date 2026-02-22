@@ -221,6 +221,40 @@ paths:
                       details:
                         id: pr_missing
 
+  /v1/payment-requests/{id}/settlements:
+    get:
+      summary: List settlement evidence by payment request id
+      operationId: listPaymentRequestSettlements
+      tags:
+        - payments
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Settlement evidence list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequestSettlementsResponse'
+        "404":
+          description: Payment request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                payment_request_not_found:
+                  value:
+                    error:
+                      code: payment_request_not_found
+                      message: payment request was not found
+                      details:
+                        id: pr_missing
+
   /v1/webhook-outbox/overview:
     get:
       summary: Get webhook outbox overview snapshot
@@ -603,6 +637,68 @@ components:
         token_decimals:
           type: integer
           example: 6
+
+    PaymentRequestSettlementsResponse:
+      type: object
+      required:
+        - payment_request_id
+        - settlements
+      properties:
+        payment_request_id:
+          type: string
+          example: pr_5fd7279523aa31ef6bb8017f
+        settlements:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentRequestSettlement'
+
+    PaymentRequestSettlement:
+      type: object
+      required:
+        - evidence_ref
+        - amount_minor
+        - confirmations
+        - is_canonical
+        - metadata
+        - first_seen_at
+        - last_seen_at
+        - updated_at
+      properties:
+        evidence_ref:
+          type: string
+          example: btc:tx:9e7f...
+        amount_minor:
+          type: string
+          pattern: '^[0-9]{1,78}$'
+          example: "150000"
+        confirmations:
+          type: integer
+          minimum: 0
+          example: 3
+        block_height:
+          type: integer
+          format: int64
+          nullable: true
+          example: 300
+        block_hash:
+          type: string
+          nullable: true
+          example: 0000000000000000000abc...
+        is_canonical:
+          type: boolean
+          example: true
+        metadata:
+          type: object
+          additionalProperties: true
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     WebhookOutboxOverviewResponse:
       type: object

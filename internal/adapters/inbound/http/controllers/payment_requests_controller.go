@@ -19,9 +19,10 @@ const (
 )
 
 type PaymentRequestsController struct {
-	createUseCase portsin.CreatePaymentRequestUseCase
-	getUseCase    portsin.GetPaymentRequestUseCase
-	logger        *log.Logger
+	createUseCase         portsin.CreatePaymentRequestUseCase
+	getUseCase            portsin.GetPaymentRequestUseCase
+	getSettlementsUseCase portsin.GetPaymentRequestSettlementsUseCase
+	logger                *log.Logger
 }
 
 type createPaymentRequestPayload struct {
@@ -37,12 +38,14 @@ type createPaymentRequestPayload struct {
 func NewPaymentRequestsController(
 	createUseCase portsin.CreatePaymentRequestUseCase,
 	getUseCase portsin.GetPaymentRequestUseCase,
+	getSettlementsUseCase portsin.GetPaymentRequestSettlementsUseCase,
 	logger *log.Logger,
 ) *PaymentRequestsController {
 	return &PaymentRequestsController{
-		createUseCase: createUseCase,
-		getUseCase:    getUseCase,
-		logger:        logger,
+		createUseCase:         createUseCase,
+		getUseCase:            getUseCase,
+		getSettlementsUseCase: getSettlementsUseCase,
+		logger:                logger,
 	}
 }
 
@@ -90,6 +93,21 @@ func (c *PaymentRequestsController) GetPaymentRequest(w http.ResponseWriter, r *
 	resource, appErr := c.getUseCase.Execute(r.Context(), dto.GetPaymentRequestQuery{ID: id})
 	if appErr != nil {
 		c.logger.Printf("request error path=/v1/payment-requests/{id} method=%s code=%s message=%s", r.Method, appErr.Code, appErr.Message)
+		writeAppError(w, appErr)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
+}
+
+func (c *PaymentRequestsController) GetPaymentRequestSettlements(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	resource, appErr := c.getSettlementsUseCase.Execute(
+		r.Context(),
+		dto.GetPaymentRequestSettlementsQuery{ID: id},
+	)
+	if appErr != nil {
+		c.logger.Printf("request error path=/v1/payment-requests/{id}/settlements method=%s code=%s message=%s", r.Method, appErr.Code, appErr.Message)
 		writeAppError(w, appErr)
 		return
 	}

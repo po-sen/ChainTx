@@ -21,6 +21,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestCreated(t *testing.T) {
 	controller := NewPaymentRequestsController(
 		stubCreateUseCase{replayed: false},
 		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -42,6 +43,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestReplayed(t *testing.T) {
 	controller := NewPaymentRequestsController(
 		stubCreateUseCase{replayed: true},
 		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -63,6 +65,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestInvalidJSON(t *testing.T) 
 	controller := NewPaymentRequestsController(
 		stubCreateUseCase{replayed: false},
 		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -88,6 +91,7 @@ func TestPaymentRequestsControllerCreatePaymentRequestMissingWebhookURL(t *testi
 	controller := NewPaymentRequestsController(
 		stubCreateUseCase{replayed: false},
 		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -112,6 +116,7 @@ func TestPaymentRequestsControllerGetPaymentRequest(t *testing.T) {
 	controller := NewPaymentRequestsController(
 		stubCreateUseCase{replayed: false},
 		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
 		log.New(io.Discard, "", 0),
 	)
 
@@ -126,6 +131,31 @@ func TestPaymentRequestsControllerGetPaymentRequest(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"id":"pr_test"`)) {
 		t.Fatalf("expected id in payload, got %s", rec.Body.String())
+	}
+}
+
+func TestPaymentRequestsControllerGetPaymentRequestSettlements(t *testing.T) {
+	controller := NewPaymentRequestsController(
+		stubCreateUseCase{replayed: false},
+		stubGetUseCase{},
+		stubGetSettlementsUseCase{},
+		log.New(io.Discard, "", 0),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/payment-requests/pr_test/settlements", nil)
+	req.SetPathValue("id", "pr_test")
+	rec := httptest.NewRecorder()
+
+	controller.GetPaymentRequestSettlements(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"payment_request_id":"pr_test"`)) {
+		t.Fatalf("expected payment_request_id in payload, got %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"evidence_ref":"btc:tx:1"`)) {
+		t.Fatalf("expected settlement evidence in payload, got %s", rec.Body.String())
 	}
 }
 
@@ -174,6 +204,31 @@ func (stubGetUseCase) Execute(_ context.Context, query dto.GetPaymentRequestQuer
 			Address:         "bc1qexample",
 			AddressScheme:   "bip84_p2wpkh",
 			DerivationIndex: 1,
+		},
+	}, nil
+}
+
+type stubGetSettlementsUseCase struct{}
+
+func (stubGetSettlementsUseCase) Execute(
+	_ context.Context,
+	query dto.GetPaymentRequestSettlementsQuery,
+) (dto.PaymentRequestSettlementsResource, *apperrors.AppError) {
+	now := time.Unix(0, 0).UTC()
+
+	return dto.PaymentRequestSettlementsResource{
+		PaymentRequestID: query.ID,
+		Settlements: []dto.PaymentRequestSettlementResource{
+			{
+				EvidenceRef:   "btc:tx:1",
+				AmountMinor:   "1000",
+				Confirmations: 1,
+				IsCanonical:   true,
+				Metadata:      map[string]any{"source": "chain_stats"},
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				UpdatedAt:     now,
+			},
 		},
 	}, nil
 }

@@ -585,6 +585,139 @@ func TestPaymentRequestRepositorySyncObservedSettlementsIntegrationNoWriteOnUnch
 	}
 }
 
+func TestPaymentRequestReadModelListSettlementsByPaymentRequestIDNotFound(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+	harness.resetState(t)
+
+	readModel := NewReadModel(harness.db)
+	settlements, found, appErr := readModel.ListSettlementsByPaymentRequestID(
+		context.Background(),
+		"pr_missing",
+	)
+	if appErr != nil {
+		t.Fatalf("expected success for missing id query, got %+v", appErr)
+	}
+	if found {
+		t.Fatalf("expected found=false for missing payment request")
+	}
+	if len(settlements) != 0 {
+		t.Fatalf("expected empty settlements, got %d", len(settlements))
+	}
+}
+
+func TestPaymentRequestReadModelListSettlementsByPaymentRequestIDEmpty(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+	harness.resetState(t)
+
+	catalog := harness.mustAssetCatalogEntry(t, "bitcoin", "regtest", "BTC")
+	command := newCreatePersistenceCommand(
+		catalog,
+		"pr_read_model_settlement_empty_001",
+		"read-model-settlement-empty-001",
+		"hash-read-model-settlement-empty-001",
+		time.Now().UTC(),
+	)
+	result, appErr := harness.repository.Create(context.Background(), command, deterministicResolver)
+	if appErr != nil {
+		t.Fatalf("expected create success, got %+v", appErr)
+	}
+
+	readModel := NewReadModel(harness.db)
+	settlements, found, appErr := readModel.ListSettlementsByPaymentRequestID(
+		context.Background(),
+		result.Resource.ID,
+	)
+	if appErr != nil {
+		t.Fatalf("expected read model success, got %+v", appErr)
+	}
+	if !found {
+		t.Fatalf("expected found=true for existing payment request")
+	}
+	if len(settlements) != 0 {
+		t.Fatalf("expected empty settlements, got %d", len(settlements))
+	}
+}
+
+func TestPaymentRequestReadModelListSettlementsByPaymentRequestIDOrdered(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+	harness.resetState(t)
+
+	catalog := harness.mustAssetCatalogEntry(t, "bitcoin", "regtest", "BTC")
+	command := newCreatePersistenceCommand(
+		catalog,
+		"pr_read_model_settlement_ordered_001",
+		"read-model-settlement-ordered-001",
+		"hash-read-model-settlement-ordered-001",
+		time.Now().UTC(),
+	)
+	result, appErr := harness.repository.Create(context.Background(), command, deterministicResolver)
+	if appErr != nil {
+		t.Fatalf("expected create success, got %+v", appErr)
+	}
+
+	observedAt := time.Date(2026, 2, 22, 0, 0, 0, 0, time.UTC)
+	_, appErr = harness.repository.SyncObservedSettlements(
+		context.Background(),
+		result.Resource.ID,
+		"bitcoin",
+		"regtest",
+		"BTC",
+		observedAt,
+		[]dto.ObservedSettlementEvidence{
+			{
+				EvidenceRef:   "btc:tx:b",
+				AmountMinor:   "2000",
+				Confirmations: 1,
+				IsCanonical:   true,
+				Metadata:      map[string]any{"source": "tx_b"},
+			},
+			{
+				EvidenceRef:   "btc:tx:a",
+				AmountMinor:   "1000",
+				Confirmations: 2,
+				IsCanonical:   true,
+				Metadata:      map[string]any{"source": "tx_a"},
+			},
+		},
+	)
+	if appErr != nil {
+		t.Fatalf("expected settlement sync success, got %+v", appErr)
+	}
+
+	readModel := NewReadModel(harness.db)
+	settlements, found, appErr := readModel.ListSettlementsByPaymentRequestID(
+		context.Background(),
+		result.Resource.ID,
+	)
+	if appErr != nil {
+		t.Fatalf("expected read model success, got %+v", appErr)
+	}
+	if !found {
+		t.Fatalf("expected found=true for existing payment request")
+	}
+	if len(settlements) != 2 {
+		t.Fatalf("expected 2 settlements, got %d", len(settlements))
+	}
+	if settlements[0].EvidenceRef != "btc:tx:a" {
+		t.Fatalf("expected first evidence_ref btc:tx:a, got %s", settlements[0].EvidenceRef)
+	}
+	if settlements[1].EvidenceRef != "btc:tx:b" {
+		t.Fatalf("expected second evidence_ref btc:tx:b, got %s", settlements[1].EvidenceRef)
+	}
+	if settlements[0].AmountMinor != "1000" {
+		t.Fatalf("expected amount_minor=1000, got %s", settlements[0].AmountMinor)
+	}
+	if settlements[0].Confirmations != 2 {
+		t.Fatalf("expected confirmations=2, got %d", settlements[0].Confirmations)
+	}
+	if settlements[0].Metadata["source"] != "tx_a" {
+		t.Fatalf("expected metadata source tx_a, got %v", settlements[0].Metadata["source"])
+	}
+	if settlements[0].FirstSeenAt.IsZero() || settlements[0].LastSeenAt.IsZero() || settlements[0].UpdatedAt.IsZero() {
+		t.Fatalf("expected non-zero timestamps in settlement row")
+	}
+}
+
 func newRepositoryIntegrationHarness(t *testing.T) *repositoryIntegrationHarness {
 	t.Helper()
 
