@@ -42,14 +42,51 @@ func TestReconcilePaymentRequestsUseCaseRequiresLeaseDuration(t *testing.T) {
 	useCase := NewReconcilePaymentRequestsUseCase(&fakeReconcileRepository{}, &fakeObserverGateway{})
 
 	_, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
-		BatchSize: 1,
-		WorkerID:  "worker-a",
+		BatchSize:          1,
+		WorkerID:           "worker-a",
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    1,
 	})
 	if appErr == nil {
 		t.Fatalf("expected error")
 	}
 	if appErr.Code != "reconcile_lease_duration_invalid" {
 		t.Fatalf("expected reconcile_lease_duration_invalid, got %s", appErr.Code)
+	}
+}
+
+func TestReconcilePaymentRequestsUseCaseRequiresObserveWindow(t *testing.T) {
+	useCase := NewReconcilePaymentRequestsUseCase(&fakeReconcileRepository{}, &fakeObserverGateway{})
+
+	_, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
+		BatchSize:       1,
+		WorkerID:        "worker-a",
+		LeaseDuration:   30 * time.Second,
+		StabilityCycles: 1,
+	})
+	if appErr == nil {
+		t.Fatalf("expected error")
+	}
+	if appErr.Code != "reconcile_reorg_observe_window_invalid" {
+		t.Fatalf("expected reconcile_reorg_observe_window_invalid, got %s", appErr.Code)
+	}
+}
+
+func TestReconcilePaymentRequestsUseCaseRequiresStabilityCycles(t *testing.T) {
+	useCase := NewReconcilePaymentRequestsUseCase(&fakeReconcileRepository{}, &fakeObserverGateway{})
+
+	_, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
+		BatchSize:          1,
+		WorkerID:           "worker-a",
+		LeaseDuration:      30 * time.Second,
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    0,
+	})
+	if appErr == nil {
+		t.Fatalf("expected error")
+	}
+	if appErr.Code != "reconcile_stability_cycles_invalid" {
+		t.Fatalf("expected reconcile_stability_cycles_invalid, got %s", appErr.Code)
 	}
 }
 
@@ -70,10 +107,12 @@ func TestReconcilePaymentRequestsUseCaseExpiryTransition(t *testing.T) {
 	useCase := NewReconcilePaymentRequestsUseCase(repo, &fakeObserverGateway{})
 
 	output, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
-		Now:           now,
-		BatchSize:     50,
-		WorkerID:      "worker-a",
-		LeaseDuration: 30 * time.Second,
+		Now:                now,
+		BatchSize:          50,
+		WorkerID:           "worker-a",
+		LeaseDuration:      30 * time.Second,
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    1,
 	})
 	if appErr != nil {
 		t.Fatalf("expected no error, got %+v", appErr)
@@ -119,24 +158,34 @@ func TestReconcilePaymentRequestsUseCaseDetectedAndConfirmed(t *testing.T) {
 				ObservedAmount:    "1000",
 				Detected:          true,
 				Confirmed:         false,
+				FinalityReached:   false,
 				ObservationSource: "btc_esplora",
+				Settlements: []dto.ObservedSettlementEvidence{
+					{EvidenceRef: "btc:chain_stats", AmountMinor: "1000", Confirmations: 1, IsCanonical: true},
+				},
 			},
 			"pr_confirm": {
 				Supported:         true,
 				ObservedAmount:    "200",
 				Detected:          true,
 				Confirmed:         true,
+				FinalityReached:   true,
 				ObservationSource: "evm_rpc",
+				Settlements: []dto.ObservedSettlementEvidence{
+					{EvidenceRef: "evm:confirmed_snapshot", AmountMinor: "200", Confirmations: 3, IsCanonical: true},
+				},
 			},
 		},
 	}
 	useCase := NewReconcilePaymentRequestsUseCase(repo, observer)
 
 	output, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
-		Now:           now,
-		BatchSize:     50,
-		WorkerID:      "worker-a",
-		LeaseDuration: 30 * time.Second,
+		Now:                now,
+		BatchSize:          50,
+		WorkerID:           "worker-a",
+		LeaseDuration:      30 * time.Second,
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    1,
 	})
 	if appErr != nil {
 		t.Fatalf("expected no error, got %+v", appErr)
@@ -176,10 +225,12 @@ func TestReconcilePaymentRequestsUseCaseObserverErrorContinues(t *testing.T) {
 	useCase := NewReconcilePaymentRequestsUseCase(repo, observer)
 
 	output, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
-		Now:           now,
-		BatchSize:     10,
-		WorkerID:      "worker-a",
-		LeaseDuration: 30 * time.Second,
+		Now:                now,
+		BatchSize:          10,
+		WorkerID:           "worker-a",
+		LeaseDuration:      30 * time.Second,
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    1,
 	})
 	if appErr != nil {
 		t.Fatalf("expected no fatal error, got %+v", appErr)
@@ -187,18 +238,105 @@ func TestReconcilePaymentRequestsUseCaseObserverErrorContinues(t *testing.T) {
 	if output.Errors != 1 {
 		t.Fatalf("expected errors=1, got %d", output.Errors)
 	}
-	if len(repo.transitions) != 0 {
-		t.Fatalf("expected no transitions, got %d", len(repo.transitions))
+	if len(repo.transitions) != 1 || repo.transitions[0].currentStatus != repo.transitions[0].nextStatus {
+		t.Fatalf("expected metadata-only transition, got %+v", repo.transitions)
+	}
+}
+
+func TestReconcilePaymentRequestsUseCaseReorgAndReconfirm(t *testing.T) {
+	now := time.Date(2026, 2, 20, 14, 0, 0, 0, time.UTC)
+	reconcileMeta := map[string]any{
+		"reconciliation": map[string]any{
+			"first_confirmed_at":       now.Add(-5 * time.Minute).Format(time.RFC3339Nano),
+			"stability_signal":         "demote",
+			"stability_demote_streak":  1,
+			"stability_promote_streak": 0,
+			"finality_reached_at":      now.Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		},
+	}
+	repo := &fakeReconcileRepository{
+		rows: []dto.OpenPaymentRequestForReconciliation{
+			{
+				ID:               "pr_reorg",
+				Status:           "confirmed",
+				Chain:            "bitcoin",
+				Network:          "regtest",
+				Asset:            "BTC",
+				AddressCanonical: "bcrt1x",
+				ExpiresAt:        now.Add(10 * time.Minute),
+				Metadata:         reconcileMeta,
+			},
+			{
+				ID:               "pr_reconfirm",
+				Status:           "reorged",
+				Chain:            "bitcoin",
+				Network:          "regtest",
+				Asset:            "BTC",
+				AddressCanonical: "bcrt1y",
+				ExpiresAt:        now.Add(10 * time.Minute),
+			},
+		},
+		settlementSummaries: map[string]dto.ReconcileSettlementSyncResult{
+			"pr_reorg":     {CanonicalCount: 0, NonCanonicalCount: 1, NewlyOrphanedCount: 1},
+			"pr_reconfirm": {CanonicalCount: 1, NonCanonicalCount: 0, NewlyOrphanedCount: 0},
+		},
+	}
+	observer := &fakeObserverGateway{
+		responses: map[string]dto.ObservePaymentRequestOutput{
+			"pr_reorg": {
+				Supported:         true,
+				ObservedAmount:    "0",
+				Detected:          false,
+				Confirmed:         false,
+				FinalityReached:   false,
+				ObservationSource: "btc_esplora",
+				Settlements: []dto.ObservedSettlementEvidence{
+					{EvidenceRef: "btc:chain_stats", AmountMinor: "0", Confirmations: 0, IsCanonical: true},
+				},
+			},
+			"pr_reconfirm": {
+				Supported:         true,
+				ObservedAmount:    "1000",
+				Detected:          false,
+				Confirmed:         true,
+				FinalityReached:   true,
+				ObservationSource: "btc_esplora",
+				Settlements: []dto.ObservedSettlementEvidence{
+					{EvidenceRef: "btc:chain_stats", AmountMinor: "1000", Confirmations: 2, IsCanonical: true},
+				},
+			},
+		},
+	}
+	useCase := NewReconcilePaymentRequestsUseCase(repo, observer)
+
+	output, appErr := useCase.Execute(context.Background(), dto.ReconcilePaymentRequestsCommand{
+		Now:                now,
+		BatchSize:          10,
+		WorkerID:           "worker-a",
+		LeaseDuration:      30 * time.Second,
+		ReorgObserveWindow: 24 * time.Hour,
+		StabilityCycles:    1,
+	})
+	if appErr != nil {
+		t.Fatalf("expected no fatal error, got %+v", appErr)
+	}
+	if output.Reorged != 1 {
+		t.Fatalf("expected reorged=1, got %+v", output)
+	}
+	if output.Reconfirmed != 1 {
+		t.Fatalf("expected reconfirmed=1, got %+v", output)
 	}
 }
 
 type fakeReconcileRepository struct {
-	rows               []dto.OpenPaymentRequestForReconciliation
-	claimErr           *apperrors.AppError
-	transitionErr      *apperrors.AppError
-	transitionAccepted bool
-	transitions        []fakeTransition
-	leaseOwners        []string
+	rows                []dto.OpenPaymentRequestForReconciliation
+	claimErr            *apperrors.AppError
+	settlementErr       *apperrors.AppError
+	transitionErr       *apperrors.AppError
+	transitionAccepted  bool
+	transitions         []fakeTransition
+	leaseOwners         []string
+	settlementSummaries map[string]dto.ReconcileSettlementSyncResult
 }
 
 type fakeTransition struct {
@@ -210,6 +348,7 @@ type fakeTransition struct {
 func (f *fakeReconcileRepository) ClaimOpenForReconciliation(
 	_ context.Context,
 	_ time.Time,
+	_ time.Duration,
 	_ int,
 	leaseOwner string,
 	_ time.Time,
@@ -243,6 +382,26 @@ func (f *fakeReconcileRepository) TransitionStatusIfCurrent(
 		return true, nil
 	}
 	return true, nil
+}
+
+func (f *fakeReconcileRepository) SyncObservedSettlements(
+	_ context.Context,
+	requestID string,
+	_ string,
+	_ string,
+	_ string,
+	_ time.Time,
+	_ []dto.ObservedSettlementEvidence,
+) (dto.ReconcileSettlementSyncResult, *apperrors.AppError) {
+	if f.settlementErr != nil {
+		return dto.ReconcileSettlementSyncResult{}, f.settlementErr
+	}
+	if f.settlementSummaries != nil {
+		if summary, exists := f.settlementSummaries[requestID]; exists {
+			return summary, nil
+		}
+	}
+	return dto.ReconcileSettlementSyncResult{}, nil
 }
 
 type fakeObserverGateway struct {

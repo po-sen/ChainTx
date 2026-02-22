@@ -268,12 +268,14 @@ func buildRuntimeDependencies(cfg config.Config, logger *log.Logger) runtimeDepe
 
 func buildChainObserverGateway(cfg config.Config) portsout.PaymentChainObserverGateway {
 	return chainobserverdevtest.NewGateway(chainobserverdevtest.Config{
-		BTCExploraBaseURL: cfg.BTCExploraBaseURL,
-		EVMRPCURLs:        cfg.EVMRPCURLs,
-		DetectedBPS:       cfg.ReconcilerDetectedBPS,
-		ConfirmedBPS:      cfg.ReconcilerConfirmedBPS,
-		BTCMinConf:        cfg.ReconcilerBTCMinConf,
-		EVMMinConf:        cfg.ReconcilerEVMMinConf,
+		BTCExploraBaseURL:  cfg.BTCExploraBaseURL,
+		EVMRPCURLs:         cfg.EVMRPCURLs,
+		DetectedBPS:        cfg.ReconcilerDetectedBPS,
+		ConfirmedBPS:       cfg.ReconcilerConfirmedBPS,
+		BTCMinConf:         cfg.ReconcilerBTCMinConf,
+		BTCFinalityMinConf: cfg.ReconcilerBTCFinalityMinConf,
+		EVMMinConf:         cfg.ReconcilerEVMMinConf,
+		EVMFinalityMinConf: cfg.ReconcilerEVMFinalityMinConf,
 	})
 }
 
@@ -303,6 +305,8 @@ func buildReconcilerWorker(
 		cfg.ReconcilerBatchSize,
 		cfg.ReconcilerWorkerID,
 		cfg.ReconcilerLeaseDuration,
+		cfg.ReconcilerReorgObserveWindow,
+		cfg.ReconcilerStabilityCycles,
 		useCase,
 		logger,
 	)

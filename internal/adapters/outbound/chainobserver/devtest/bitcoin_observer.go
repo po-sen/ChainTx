@@ -34,10 +34,13 @@ type esploraAddressStats struct {
 }
 
 type esploraAddressUTXO struct {
-	Value  int64 `json:"value"`
+	TxID   string `json:"txid"`
+	Vout   int64  `json:"vout"`
+	Value  int64  `json:"value"`
 	Status struct {
-		Confirmed   bool  `json:"confirmed"`
-		BlockHeight int64 `json:"block_height"`
+		Confirmed   bool   `json:"confirmed"`
+		BlockHeight int64  `json:"block_height"`
+		BlockHash   string `json:"block_hash"`
 	} `json:"status"`
 }
 
@@ -76,22 +79,73 @@ func (o *bitcoinObserver) Observe(
 		return dto.ObservePaymentRequestOutput{}, statsErr
 	}
 
-	confirmedAmount := big.NewInt(stats.ChainStats.FundedTXOSum)
 	detectedAmount := big.NewInt(stats.ChainStats.FundedTXOSum + stats.MempoolStats.FundedTXOSum)
-	tipHeight := int64(0)
-	if o.confirmations.btcMin > 1 {
-		byDepth, tip, depthErr := o.confirmedAmountByMinConfirmations(requestCtx, address, network)
-		if depthErr != nil {
-			return dto.ObservePaymentRequestOutput{}, depthErr
+	tipHeight, tipErr := o.fetchTipHeight(requestCtx, network)
+	if tipErr != nil {
+		return dto.ObservePaymentRequestOutput{}, tipErr
+	}
+
+	utxos, utxoErr := o.fetchAddressUTXOs(requestCtx, address, network)
+	if utxoErr != nil {
+		return dto.ObservePaymentRequestOutput{}, utxoErr
+	}
+
+	confirmedAmount := big.NewInt(0)
+	finalityAmount := big.NewInt(0)
+	settlements := make([]dto.ObservedSettlementEvidence, 0, len(utxos))
+	for index, utxo := range utxos {
+		confirmations := 0
+		if utxo.Status.Confirmed && utxo.Status.BlockHeight > 0 {
+			confirmations = int(tipHeight-utxo.Status.BlockHeight) + 1
+			if confirmations < 0 {
+				confirmations = 0
+			}
 		}
-		confirmedAmount = byDepth
-		tipHeight = tip
+
+		if confirmations >= o.confirmations.btcBusinessMin {
+			confirmedAmount.Add(confirmedAmount, big.NewInt(utxo.Value))
+		}
+		if confirmations >= o.confirmations.btcFinalityMin {
+			finalityAmount.Add(finalityAmount, big.NewInt(utxo.Value))
+		}
+
+		evidenceRef := strings.TrimSpace(utxo.TxID)
+		if evidenceRef != "" {
+			evidenceRef = evidenceRef + ":" + strconv.FormatInt(utxo.Vout, 10)
+		} else {
+			evidenceRef = fmt.Sprintf("btc:utxo:%d:%d:%d", index, utxo.Status.BlockHeight, utxo.Value)
+		}
+
+		var blockHeight *int64
+		if utxo.Status.BlockHeight > 0 {
+			height := utxo.Status.BlockHeight
+			blockHeight = &height
+		}
+
+		var blockHash *string
+		if strings.TrimSpace(utxo.Status.BlockHash) != "" {
+			hash := strings.TrimSpace(utxo.Status.BlockHash)
+			blockHash = &hash
+		}
+
+		settlements = append(settlements, dto.ObservedSettlementEvidence{
+			EvidenceRef:   evidenceRef,
+			AmountMinor:   strconv.FormatInt(utxo.Value, 10),
+			Confirmations: confirmations,
+			IsCanonical:   true,
+			BlockHeight:   blockHeight,
+			BlockHash:     blockHash,
+			Metadata: map[string]any{
+				"source": "utxo",
+			},
+		})
 	}
 
 	confirmedRequired := o.thresholds.confirmedRequired(expected)
 	detectedRequired := o.thresholds.detectedRequired(expected)
 
 	confirmed := confirmedAmount.Cmp(confirmedRequired) >= 0
+	finalityReached := finalityAmount.Cmp(confirmedRequired) >= 0
 	detected := !confirmed && detectedAmount.Cmp(detectedRequired) >= 0
 
 	return dto.ObservePaymentRequestOutput{
@@ -99,18 +153,23 @@ func (o *bitcoinObserver) Observe(
 		ObservedAmount:    detectedAmount.String(),
 		Detected:          detected,
 		Confirmed:         confirmed,
+		FinalityReached:   finalityReached,
 		ObservationSource: "btc_esplora",
 		ObservationDetails: map[string]any{
-			"confirmed_amount_minor":   confirmedAmount.String(),
-			"mempool_amount_minor":     fmt.Sprintf("%d", stats.MempoolStats.FundedTXOSum),
-			"network":                  network,
-			"detected_threshold_bps":   o.thresholds.detectedBPS,
-			"confirmed_threshold_bps":  o.thresholds.confirmedBPS,
-			"detected_required_minor":  detectedRequired.String(),
-			"confirmed_required_minor": confirmedRequired.String(),
-			"btc_min_confirmations":    o.confirmations.btcMin,
-			"tip_height":               tipHeight,
+			"confirmed_amount_minor":         confirmedAmount.String(),
+			"finality_amount_minor":          finalityAmount.String(),
+			"mempool_amount_minor":           fmt.Sprintf("%d", stats.MempoolStats.FundedTXOSum),
+			"network":                        network,
+			"detected_threshold_bps":         o.thresholds.detectedBPS,
+			"confirmed_threshold_bps":        o.thresholds.confirmedBPS,
+			"detected_required_minor":        detectedRequired.String(),
+			"confirmed_required_minor":       confirmedRequired.String(),
+			"btc_business_min_confirmations": o.confirmations.btcBusinessMin,
+			"btc_finality_min_confirmations": o.confirmations.btcFinalityMin,
+			"tip_height":                     tipHeight,
+			"settlement_item_count":          len(settlements),
 		},
+		Settlements: settlements,
 	}, nil
 }
 
@@ -259,35 +318,4 @@ func (o *bitcoinObserver) fetchTipHeight(
 		)
 	}
 	return parsed, nil
-}
-
-func (o *bitcoinObserver) confirmedAmountByMinConfirmations(
-	ctx context.Context,
-	address string,
-	network string,
-) (*big.Int, int64, *apperrors.AppError) {
-	tipHeight, tipErr := o.fetchTipHeight(ctx, network)
-	if tipErr != nil {
-		return nil, 0, tipErr
-	}
-
-	utxos, utxoErr := o.fetchAddressUTXOs(ctx, address, network)
-	if utxoErr != nil {
-		return nil, tipHeight, utxoErr
-	}
-
-	sum := big.NewInt(0)
-	required := int64(o.confirmations.btcMin)
-	for _, utxo := range utxos {
-		if !utxo.Status.Confirmed || utxo.Status.BlockHeight <= 0 {
-			continue
-		}
-		confirmations := tipHeight - utxo.Status.BlockHeight + 1
-		if confirmations < required {
-			continue
-		}
-		sum.Add(sum, big.NewInt(utxo.Value))
-	}
-
-	return sum, tipHeight, nil
 }

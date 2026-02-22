@@ -501,6 +501,90 @@ func TestPaymentRequestRepositoryCreateIntegrationLatencyP95At20RPS(t *testing.T
 	}
 }
 
+func TestPaymentRequestRepositorySyncObservedSettlementsIntegrationNoWriteOnUnchangedEvidence(t *testing.T) {
+	harness := newRepositoryIntegrationHarness(t)
+	harness.resetState(t)
+
+	catalog := harness.mustAssetCatalogEntry(t, "bitcoin", "regtest", "BTC")
+	command := newCreatePersistenceCommand(
+		catalog,
+		"pr_sync_settlement_noop_001",
+		"sync-settlement-noop-001",
+		"hash-sync-settlement-noop-001",
+		time.Now().UTC(),
+	)
+	result, appErr := harness.repository.Create(context.Background(), command, deterministicResolver)
+	if appErr != nil {
+		t.Fatalf("expected create success, got %+v", appErr)
+	}
+
+	observedAt1 := time.Date(2026, 2, 21, 16, 0, 0, 0, time.UTC)
+	settlements := []dto.ObservedSettlementEvidence{
+		{
+			EvidenceRef:   "btc:chain_stats",
+			AmountMinor:   "50000",
+			Confirmations: 1,
+			IsCanonical:   true,
+			Metadata:      map[string]any{"source": "chain_stats"},
+		},
+		{
+			EvidenceRef:   "btc:mempool_stats",
+			AmountMinor:   "0",
+			Confirmations: 0,
+			IsCanonical:   true,
+			Metadata:      map[string]any{"source": "mempool_stats"},
+		},
+	}
+
+	_, appErr = harness.repository.SyncObservedSettlements(
+		context.Background(),
+		result.Resource.ID,
+		"bitcoin",
+		"regtest",
+		"BTC",
+		observedAt1,
+		settlements,
+	)
+	if appErr != nil {
+		t.Fatalf("expected first settlement sync success, got %+v", appErr)
+	}
+
+	firstUpdatedAt := harness.mustSettlementUpdatedAtByRef(t, result.Resource.ID)
+	if len(firstUpdatedAt) != 2 {
+		t.Fatalf("expected 2 settlement rows after first sync, got %d", len(firstUpdatedAt))
+	}
+
+	observedAt2 := observedAt1.Add(5 * time.Minute)
+	_, appErr = harness.repository.SyncObservedSettlements(
+		context.Background(),
+		result.Resource.ID,
+		"bitcoin",
+		"regtest",
+		"BTC",
+		observedAt2,
+		settlements,
+	)
+	if appErr != nil {
+		t.Fatalf("expected second settlement sync success, got %+v", appErr)
+	}
+
+	secondUpdatedAt := harness.mustSettlementUpdatedAtByRef(t, result.Resource.ID)
+	for evidenceRef, first := range firstUpdatedAt {
+		second, exists := secondUpdatedAt[evidenceRef]
+		if !exists {
+			t.Fatalf("expected evidence_ref %s to exist after second sync", evidenceRef)
+		}
+		if !first.Equal(second) {
+			t.Fatalf(
+				"expected unchanged evidence_ref %s to keep updated_at unchanged (first=%s second=%s)",
+				evidenceRef,
+				first.Format(time.RFC3339Nano),
+				second.Format(time.RFC3339Nano),
+			)
+		}
+	}
+}
+
 func newRepositoryIntegrationHarness(t *testing.T) *repositoryIntegrationHarness {
 	t.Helper()
 
@@ -780,6 +864,39 @@ func (h *repositoryIntegrationHarness) mustAddressCanonical(t *testing.T, paymen
 		t.Fatalf("failed to query address_canonical: %v", err)
 	}
 	return canonical
+}
+
+func (h *repositoryIntegrationHarness) mustSettlementUpdatedAtByRef(
+	t *testing.T,
+	paymentRequestID string,
+) map[string]time.Time {
+	t.Helper()
+
+	rows, err := h.db.QueryContext(
+		context.Background(),
+		`SELECT evidence_ref, updated_at FROM app.payment_request_settlements WHERE payment_request_id = $1`,
+		paymentRequestID,
+	)
+	if err != nil {
+		t.Fatalf("failed to query settlement rows: %v", err)
+	}
+	defer rows.Close()
+
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var (
+			evidenceRef string
+			updatedAt   time.Time
+		)
+		if scanErr := rows.Scan(&evidenceRef, &updatedAt); scanErr != nil {
+			t.Fatalf("failed to parse settlement row: %v", scanErr)
+		}
+		out[evidenceRef] = updatedAt.UTC()
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("failed while iterating settlement rows: %v", rowsErr)
+	}
+	return out
 }
 
 func (h *repositoryIntegrationHarness) mustWalletIndexCollisionCountByAsset(t *testing.T, chain, network, asset string) int {

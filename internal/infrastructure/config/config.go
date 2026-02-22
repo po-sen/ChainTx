@@ -26,7 +26,11 @@ const (
 	defaultDetectedThresholdBPS     = 10000
 	defaultConfirmedThresholdBPS    = 10000
 	defaultBTCMinConfirmations      = 1
+	defaultBTCFinalityConfirmations = 1
 	defaultEVMMinConfirmations      = 1
+	defaultEVMFinalityConfirmations = 1
+	defaultReorgObserveWindow       = 24 * time.Hour
+	defaultStabilityCycles          = 1
 	defaultWebhookPollInterval      = 10 * time.Second
 	defaultWebhookBatchSize         = 100
 	defaultWebhookLeaseDuration     = 30 * time.Second
@@ -52,7 +56,11 @@ const reconcilerWorkerIDEnv = "PAYMENT_REQUEST_RECONCILER_WORKER_ID"
 const reconcilerDetectedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS"
 const reconcilerConfirmedThresholdBPSEnv = "PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS"
 const reconcilerBTCMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS"
+const reconcilerBTCFinalityMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS"
 const reconcilerEVMMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS"
+const reconcilerEVMFinalityMinConfirmationsEnv = "PAYMENT_REQUEST_RECONCILER_EVM_FINALITY_MIN_CONFIRMATIONS"
+const reconcilerReorgObserveWindowEnv = "PAYMENT_REQUEST_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS"
+const reconcilerStabilityCyclesEnv = "PAYMENT_REQUEST_RECONCILER_STABILITY_CYCLES"
 const webhookEnabledEnv = "PAYMENT_REQUEST_WEBHOOK_ENABLED"
 const webhookURLAllowListEnv = "PAYMENT_REQUEST_WEBHOOK_URL_ALLOWLIST_JSON"
 const webhookHMACSecretEnv = "PAYMENT_REQUEST_WEBHOOK_HMAC_SECRET"
@@ -90,52 +98,56 @@ func (e *ConfigError) Error() string {
 }
 
 type Config struct {
-	Port                     string
-	OpenAPISpecPath          string
-	ShutdownTimeout          time.Duration
-	DatabaseURL              string
-	DatabaseTarget           string
-	DBReadinessTimeout       time.Duration
-	DBReadinessRetryInterval time.Duration
-	MigrationsPath           string
-	AllocationMode           string
-	DevtestAllowMainnet      bool
-	DevtestKeysets           map[string]string
-	DevtestKeysetPreflights  []DevtestKeysetPreflightEntry
-	KeysetHashAlgorithm      string
-	KeysetHashHMACSecret     string
-	KeysetHashHMACLegacyKeys []string
-	ReconcilerEnabled        bool
-	ReconcilerPollInterval   time.Duration
-	ReconcilerBatchSize      int
-	ReconcilerLeaseDuration  time.Duration
-	ReconcilerWorkerID       string
-	ReconcilerDetectedBPS    int
-	ReconcilerConfirmedBPS   int
-	ReconcilerBTCMinConf     int
-	ReconcilerEVMMinConf     int
-	WebhookEnabled           bool
-	WebhookURLAllowList      []string
-	WebhookHMACSecret        string
-	WebhookPollInterval      time.Duration
-	WebhookBatchSize         int
-	WebhookLeaseDuration     time.Duration
-	WebhookWorkerID          string
-	WebhookTimeout           time.Duration
-	WebhookMaxAttempts       int
-	WebhookInitialBackoff    time.Duration
-	WebhookMaxBackoff        time.Duration
-	WebhookRetryJitterBPS    int
-	WebhookRetryBudget       int
-	WebhookAlertEnabled      bool
-	WebhookAlertCooldown     time.Duration
-	WebhookAlertFailedCount  int64
-	WebhookAlertPendingReady int64
-	WebhookAlertOldestAgeSec int64
-	WebhookOpsAdminKeys      []string
-	BTCExploraBaseURL        string
-	EVMRPCURLs               map[string]string
-	AddressSchemeAllowList   map[string]map[string]struct{}
+	Port                         string
+	OpenAPISpecPath              string
+	ShutdownTimeout              time.Duration
+	DatabaseURL                  string
+	DatabaseTarget               string
+	DBReadinessTimeout           time.Duration
+	DBReadinessRetryInterval     time.Duration
+	MigrationsPath               string
+	AllocationMode               string
+	DevtestAllowMainnet          bool
+	DevtestKeysets               map[string]string
+	DevtestKeysetPreflights      []DevtestKeysetPreflightEntry
+	KeysetHashAlgorithm          string
+	KeysetHashHMACSecret         string
+	KeysetHashHMACLegacyKeys     []string
+	ReconcilerEnabled            bool
+	ReconcilerPollInterval       time.Duration
+	ReconcilerBatchSize          int
+	ReconcilerLeaseDuration      time.Duration
+	ReconcilerWorkerID           string
+	ReconcilerDetectedBPS        int
+	ReconcilerConfirmedBPS       int
+	ReconcilerBTCMinConf         int
+	ReconcilerBTCFinalityMinConf int
+	ReconcilerEVMMinConf         int
+	ReconcilerEVMFinalityMinConf int
+	ReconcilerReorgObserveWindow time.Duration
+	ReconcilerStabilityCycles    int
+	WebhookEnabled               bool
+	WebhookURLAllowList          []string
+	WebhookHMACSecret            string
+	WebhookPollInterval          time.Duration
+	WebhookBatchSize             int
+	WebhookLeaseDuration         time.Duration
+	WebhookWorkerID              string
+	WebhookTimeout               time.Duration
+	WebhookMaxAttempts           int
+	WebhookInitialBackoff        time.Duration
+	WebhookMaxBackoff            time.Duration
+	WebhookRetryJitterBPS        int
+	WebhookRetryBudget           int
+	WebhookAlertEnabled          bool
+	WebhookAlertCooldown         time.Duration
+	WebhookAlertFailedCount      int64
+	WebhookAlertPendingReady     int64
+	WebhookAlertOldestAgeSec     int64
+	WebhookOpsAdminKeys          []string
+	BTCExploraBaseURL            string
+	EVMRPCURLs                   map[string]string
+	AddressSchemeAllowList       map[string]map[string]struct{}
 }
 
 func LoadConfig() (Config, *ConfigError) {
@@ -248,52 +260,56 @@ func LoadConfig() (Config, *ConfigError) {
 	}
 
 	return Config{
-		Port:                     port,
-		OpenAPISpecPath:          openAPISpecPath,
-		ShutdownTimeout:          defaultShutdownTimeout,
-		DatabaseURL:              databaseURL,
-		DatabaseTarget:           databaseTarget,
-		DBReadinessTimeout:       defaultDBReadinessTimeout,
-		DBReadinessRetryInterval: defaultDBReadinessRetryInterval,
-		MigrationsPath:           defaultMigrationsPath,
-		AllocationMode:           allocationMode,
-		DevtestAllowMainnet:      allowMainnet,
-		DevtestKeysets:           devtestKeysets,
-		DevtestKeysetPreflights:  devtestKeysetPreflights,
-		KeysetHashAlgorithm:      defaultKeysetHashAlgo,
-		KeysetHashHMACSecret:     keysetHashHMACSecret,
-		KeysetHashHMACLegacyKeys: keysetHashLegacyKeys,
-		ReconcilerEnabled:        reconcilerCfg.Enabled,
-		ReconcilerPollInterval:   reconcilerCfg.PollInterval,
-		ReconcilerBatchSize:      reconcilerCfg.BatchSize,
-		ReconcilerLeaseDuration:  reconcilerCfg.LeaseDuration,
-		ReconcilerWorkerID:       reconcilerWorkerID,
-		ReconcilerDetectedBPS:    reconcilerCfg.DetectedBPS,
-		ReconcilerConfirmedBPS:   reconcilerCfg.ConfirmedBPS,
-		ReconcilerBTCMinConf:     reconcilerCfg.BTCMinConfirmations,
-		ReconcilerEVMMinConf:     reconcilerCfg.EVMMinConfirmations,
-		WebhookEnabled:           webhookCfg.Enabled,
-		WebhookURLAllowList:      webhookAllowList,
-		WebhookHMACSecret:        webhookCfg.HMACSecret,
-		WebhookPollInterval:      webhookCfg.PollInterval,
-		WebhookBatchSize:         webhookCfg.BatchSize,
-		WebhookLeaseDuration:     webhookCfg.LeaseDuration,
-		WebhookWorkerID:          webhookWorkerID,
-		WebhookTimeout:           webhookCfg.Timeout,
-		WebhookMaxAttempts:       webhookCfg.MaxAttempts,
-		WebhookInitialBackoff:    webhookCfg.InitialBackoff,
-		WebhookMaxBackoff:        webhookCfg.MaxBackoff,
-		WebhookRetryJitterBPS:    webhookCfg.RetryJitterBPS,
-		WebhookRetryBudget:       webhookCfg.RetryBudget,
-		WebhookAlertEnabled:      webhookCfg.AlertEnabled,
-		WebhookAlertCooldown:     webhookCfg.AlertCooldown,
-		WebhookAlertFailedCount:  webhookCfg.AlertFailedCountThreshold,
-		WebhookAlertPendingReady: webhookCfg.AlertPendingReadyThreshold,
-		WebhookAlertOldestAgeSec: webhookCfg.AlertOldestPendingAgeSeconds,
-		WebhookOpsAdminKeys:      webhookOpsAdminKeys,
-		BTCExploraBaseURL:        btcExploraBaseURL,
-		EVMRPCURLs:               evmRPCURLs,
-		AddressSchemeAllowList:   addressSchemeAllowList,
+		Port:                         port,
+		OpenAPISpecPath:              openAPISpecPath,
+		ShutdownTimeout:              defaultShutdownTimeout,
+		DatabaseURL:                  databaseURL,
+		DatabaseTarget:               databaseTarget,
+		DBReadinessTimeout:           defaultDBReadinessTimeout,
+		DBReadinessRetryInterval:     defaultDBReadinessRetryInterval,
+		MigrationsPath:               defaultMigrationsPath,
+		AllocationMode:               allocationMode,
+		DevtestAllowMainnet:          allowMainnet,
+		DevtestKeysets:               devtestKeysets,
+		DevtestKeysetPreflights:      devtestKeysetPreflights,
+		KeysetHashAlgorithm:          defaultKeysetHashAlgo,
+		KeysetHashHMACSecret:         keysetHashHMACSecret,
+		KeysetHashHMACLegacyKeys:     keysetHashLegacyKeys,
+		ReconcilerEnabled:            reconcilerCfg.Enabled,
+		ReconcilerPollInterval:       reconcilerCfg.PollInterval,
+		ReconcilerBatchSize:          reconcilerCfg.BatchSize,
+		ReconcilerLeaseDuration:      reconcilerCfg.LeaseDuration,
+		ReconcilerWorkerID:           reconcilerWorkerID,
+		ReconcilerDetectedBPS:        reconcilerCfg.DetectedBPS,
+		ReconcilerConfirmedBPS:       reconcilerCfg.ConfirmedBPS,
+		ReconcilerBTCMinConf:         reconcilerCfg.BTCMinConfirmations,
+		ReconcilerBTCFinalityMinConf: reconcilerCfg.BTCFinalityMinConfirmations,
+		ReconcilerEVMMinConf:         reconcilerCfg.EVMMinConfirmations,
+		ReconcilerEVMFinalityMinConf: reconcilerCfg.EVMFinalityMinConfirmations,
+		ReconcilerReorgObserveWindow: reconcilerCfg.ReorgObserveWindow,
+		ReconcilerStabilityCycles:    reconcilerCfg.StabilityCycles,
+		WebhookEnabled:               webhookCfg.Enabled,
+		WebhookURLAllowList:          webhookAllowList,
+		WebhookHMACSecret:            webhookCfg.HMACSecret,
+		WebhookPollInterval:          webhookCfg.PollInterval,
+		WebhookBatchSize:             webhookCfg.BatchSize,
+		WebhookLeaseDuration:         webhookCfg.LeaseDuration,
+		WebhookWorkerID:              webhookWorkerID,
+		WebhookTimeout:               webhookCfg.Timeout,
+		WebhookMaxAttempts:           webhookCfg.MaxAttempts,
+		WebhookInitialBackoff:        webhookCfg.InitialBackoff,
+		WebhookMaxBackoff:            webhookCfg.MaxBackoff,
+		WebhookRetryJitterBPS:        webhookCfg.RetryJitterBPS,
+		WebhookRetryBudget:           webhookCfg.RetryBudget,
+		WebhookAlertEnabled:          webhookCfg.AlertEnabled,
+		WebhookAlertCooldown:         webhookCfg.AlertCooldown,
+		WebhookAlertFailedCount:      webhookCfg.AlertFailedCountThreshold,
+		WebhookAlertPendingReady:     webhookCfg.AlertPendingReadyThreshold,
+		WebhookAlertOldestAgeSec:     webhookCfg.AlertOldestPendingAgeSeconds,
+		WebhookOpsAdminKeys:          webhookOpsAdminKeys,
+		BTCExploraBaseURL:            btcExploraBaseURL,
+		EVMRPCURLs:                   evmRPCURLs,
+		AddressSchemeAllowList:       addressSchemeAllowList,
 	}, nil
 }
 
@@ -637,14 +653,18 @@ func parseWebhookOpsAdminKeys(raw string) ([]string, *ConfigError) {
 }
 
 type reconcilerRuntimeConfig struct {
-	Enabled             bool
-	PollInterval        time.Duration
-	BatchSize           int
-	LeaseDuration       time.Duration
-	DetectedBPS         int
-	ConfirmedBPS        int
-	BTCMinConfirmations int
-	EVMMinConfirmations int
+	Enabled                     bool
+	PollInterval                time.Duration
+	BatchSize                   int
+	LeaseDuration               time.Duration
+	DetectedBPS                 int
+	ConfirmedBPS                int
+	BTCMinConfirmations         int
+	BTCFinalityMinConfirmations int
+	EVMMinConfirmations         int
+	EVMFinalityMinConfirmations int
+	ReorgObserveWindow          time.Duration
+	StabilityCycles             int
 }
 
 type webhookRuntimeConfig struct {
@@ -771,6 +791,25 @@ func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
 		btcMinConfirmations = parsed
 	}
 
+	btcFinalityMinConfirmations := btcMinConfirmations
+	rawBTCFinalityMinConfirmations := strings.TrimSpace(os.Getenv(reconcilerBTCFinalityMinConfirmationsEnv))
+	if rawBTCFinalityMinConfirmations != "" {
+		parsed, err := strconv.Atoi(rawBTCFinalityMinConfirmations)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS_INVALID",
+				Message: reconcilerBTCFinalityMinConfirmationsEnv + " must be a positive integer",
+			}
+		}
+		btcFinalityMinConfirmations = parsed
+	}
+	if btcFinalityMinConfirmations < btcMinConfirmations {
+		return reconcilerRuntimeConfig{}, &ConfigError{
+			Code:    "CONFIG_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS_INVALID",
+			Message: reconcilerBTCFinalityMinConfirmationsEnv + " must be greater than or equal to " + reconcilerBTCMinConfirmationsEnv,
+		}
+	}
+
 	evmMinConfirmations := defaultEVMMinConfirmations
 	rawEVMMinConfirmations := strings.TrimSpace(os.Getenv(reconcilerEVMMinConfirmationsEnv))
 	if rawEVMMinConfirmations != "" {
@@ -784,15 +823,64 @@ func parseReconcilerConfig() (reconcilerRuntimeConfig, *ConfigError) {
 		evmMinConfirmations = parsed
 	}
 
+	evmFinalityMinConfirmations := evmMinConfirmations
+	rawEVMFinalityMinConfirmations := strings.TrimSpace(os.Getenv(reconcilerEVMFinalityMinConfirmationsEnv))
+	if rawEVMFinalityMinConfirmations != "" {
+		parsed, err := strconv.Atoi(rawEVMFinalityMinConfirmations)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_EVM_FINALITY_MIN_CONFIRMATIONS_INVALID",
+				Message: reconcilerEVMFinalityMinConfirmationsEnv + " must be a positive integer",
+			}
+		}
+		evmFinalityMinConfirmations = parsed
+	}
+	if evmFinalityMinConfirmations < evmMinConfirmations {
+		return reconcilerRuntimeConfig{}, &ConfigError{
+			Code:    "CONFIG_RECONCILER_EVM_FINALITY_MIN_CONFIRMATIONS_INVALID",
+			Message: reconcilerEVMFinalityMinConfirmationsEnv + " must be greater than or equal to " + reconcilerEVMMinConfirmationsEnv,
+		}
+	}
+
+	reorgObserveWindow := defaultReorgObserveWindow
+	rawReorgObserveWindow := strings.TrimSpace(os.Getenv(reconcilerReorgObserveWindowEnv))
+	if rawReorgObserveWindow != "" {
+		parsed, err := strconv.Atoi(rawReorgObserveWindow)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS_INVALID",
+				Message: reconcilerReorgObserveWindowEnv + " must be a positive integer in seconds",
+			}
+		}
+		reorgObserveWindow = time.Duration(parsed) * time.Second
+	}
+
+	stabilityCycles := defaultStabilityCycles
+	rawStabilityCycles := strings.TrimSpace(os.Getenv(reconcilerStabilityCyclesEnv))
+	if rawStabilityCycles != "" {
+		parsed, err := strconv.Atoi(rawStabilityCycles)
+		if err != nil || parsed <= 0 {
+			return reconcilerRuntimeConfig{}, &ConfigError{
+				Code:    "CONFIG_RECONCILER_STABILITY_CYCLES_INVALID",
+				Message: reconcilerStabilityCyclesEnv + " must be a positive integer",
+			}
+		}
+		stabilityCycles = parsed
+	}
+
 	return reconcilerRuntimeConfig{
-		Enabled:             enabled,
-		PollInterval:        pollInterval,
-		BatchSize:           batchSize,
-		LeaseDuration:       leaseDuration,
-		DetectedBPS:         detectedBPS,
-		ConfirmedBPS:        confirmedBPS,
-		BTCMinConfirmations: btcMinConfirmations,
-		EVMMinConfirmations: evmMinConfirmations,
+		Enabled:                     enabled,
+		PollInterval:                pollInterval,
+		BatchSize:                   batchSize,
+		LeaseDuration:               leaseDuration,
+		DetectedBPS:                 detectedBPS,
+		ConfirmedBPS:                confirmedBPS,
+		BTCMinConfirmations:         btcMinConfirmations,
+		BTCFinalityMinConfirmations: btcFinalityMinConfirmations,
+		EVMMinConfirmations:         evmMinConfirmations,
+		EVMFinalityMinConfirmations: evmFinalityMinConfirmations,
+		ReorgObserveWindow:          reorgObserveWindow,
+		StabilityCycles:             stabilityCycles,
 	}, nil
 }
 

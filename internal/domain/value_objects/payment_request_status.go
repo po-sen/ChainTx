@@ -8,6 +8,7 @@ const (
 	PaymentRequestStatusPending   PaymentRequestStatus = "pending"
 	PaymentRequestStatusDetected  PaymentRequestStatus = "detected"
 	PaymentRequestStatusConfirmed PaymentRequestStatus = "confirmed"
+	PaymentRequestStatusReorged   PaymentRequestStatus = "reorged"
 	PaymentRequestStatusExpired   PaymentRequestStatus = "expired"
 	PaymentRequestStatusFailed    PaymentRequestStatus = "failed"
 )
@@ -24,6 +25,8 @@ func ParsePaymentRequestStatus(raw string) (PaymentRequestStatus, *apperrors.App
 		return PaymentRequestStatusDetected, nil
 	case string(PaymentRequestStatusConfirmed):
 		return PaymentRequestStatusConfirmed, nil
+	case string(PaymentRequestStatusReorged):
+		return PaymentRequestStatusReorged, nil
 	case string(PaymentRequestStatusExpired):
 		return PaymentRequestStatusExpired, nil
 	case string(PaymentRequestStatusFailed):

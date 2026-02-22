@@ -1,28 +1,50 @@
 package devtest
 
 type confirmationPolicy struct {
-	btcMin int
-	evmMin int
+	btcBusinessMin int
+	btcFinalityMin int
+	evmBusinessMin int
+	evmFinalityMin int
 }
 
 func newConfirmationPolicy(
-	rawBTC int,
-	rawEVM int,
+	rawBTCBusiness int,
+	rawBTCFinality int,
+	rawEVMBusiness int,
+	rawEVMFinality int,
 	defaultBTC int,
 	defaultEVM int,
 ) confirmationPolicy {
-	btcMin := rawBTC
-	if btcMin <= 0 {
-		btcMin = defaultBTC
+	btcBusinessMin := rawBTCBusiness
+	if btcBusinessMin <= 0 {
+		btcBusinessMin = defaultBTC
 	}
 
-	evmMin := rawEVM
-	if evmMin <= 0 {
-		evmMin = defaultEVM
+	btcFinalityMin := rawBTCFinality
+	if btcFinalityMin <= 0 {
+		btcFinalityMin = btcBusinessMin
+	}
+	if btcFinalityMin < btcBusinessMin {
+		btcFinalityMin = btcBusinessMin
+	}
+
+	evmBusinessMin := rawEVMBusiness
+	if evmBusinessMin <= 0 {
+		evmBusinessMin = defaultEVM
+	}
+
+	evmFinalityMin := rawEVMFinality
+	if evmFinalityMin <= 0 {
+		evmFinalityMin = evmBusinessMin
+	}
+	if evmFinalityMin < evmBusinessMin {
+		evmFinalityMin = evmBusinessMin
 	}
 
 	return confirmationPolicy{
-		btcMin: btcMin,
-		evmMin: evmMin,
+		btcBusinessMin: btcBusinessMin,
+		btcFinalityMin: btcFinalityMin,
+		evmBusinessMin: evmBusinessMin,
+		evmFinalityMin: evmFinalityMin,
 	}
 }

@@ -57,8 +57,20 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.ReconcilerBTCMinConf != 1 {
 		t.Fatalf("expected default btc min confirmations 1, got %d", cfg.ReconcilerBTCMinConf)
 	}
+	if cfg.ReconcilerBTCFinalityMinConf != 1 {
+		t.Fatalf("expected default btc finality min confirmations 1, got %d", cfg.ReconcilerBTCFinalityMinConf)
+	}
 	if cfg.ReconcilerEVMMinConf != 1 {
 		t.Fatalf("expected default evm min confirmations 1, got %d", cfg.ReconcilerEVMMinConf)
+	}
+	if cfg.ReconcilerEVMFinalityMinConf != 1 {
+		t.Fatalf("expected default evm finality min confirmations 1, got %d", cfg.ReconcilerEVMFinalityMinConf)
+	}
+	if cfg.ReconcilerReorgObserveWindow <= 0 {
+		t.Fatalf("expected positive default reorg observe window")
+	}
+	if cfg.ReconcilerStabilityCycles != 1 {
+		t.Fatalf("expected default reconciler stability cycles 1, got %d", cfg.ReconcilerStabilityCycles)
 	}
 	if cfg.WebhookEnabled {
 		t.Fatalf("expected webhook disabled by default")
@@ -372,7 +384,11 @@ func TestLoadConfigParsesReconcilerConfig(t *testing.T) {
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_DETECTED_THRESHOLD_BPS", "8000")
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_CONFIRMED_THRESHOLD_BPS", "9500")
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS", "2")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS", "6")
 	t.Setenv("PAYMENT_REQUEST_RECONCILER_EVM_MIN_CONFIRMATIONS", "3")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_EVM_FINALITY_MIN_CONFIRMATIONS", "8")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS", "7200")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_STABILITY_CYCLES", "2")
 	t.Setenv("PAYMENT_REQUEST_EVM_RPC_URLS_JSON", `{"local":"http://eth-node:8545"}`)
 
 	cfg, cfgErr := LoadConfig()
@@ -403,11 +419,70 @@ func TestLoadConfigParsesReconcilerConfig(t *testing.T) {
 	if cfg.ReconcilerBTCMinConf != 2 {
 		t.Fatalf("expected btc min confirmations 2, got %d", cfg.ReconcilerBTCMinConf)
 	}
+	if cfg.ReconcilerBTCFinalityMinConf != 6 {
+		t.Fatalf("expected btc finality min confirmations 6, got %d", cfg.ReconcilerBTCFinalityMinConf)
+	}
 	if cfg.ReconcilerEVMMinConf != 3 {
 		t.Fatalf("expected evm min confirmations 3, got %d", cfg.ReconcilerEVMMinConf)
 	}
+	if cfg.ReconcilerEVMFinalityMinConf != 8 {
+		t.Fatalf("expected evm finality min confirmations 8, got %d", cfg.ReconcilerEVMFinalityMinConf)
+	}
+	if cfg.ReconcilerReorgObserveWindow.Seconds() != 7200 {
+		t.Fatalf("expected reorg observe window 7200s, got %s", cfg.ReconcilerReorgObserveWindow)
+	}
+	if cfg.ReconcilerStabilityCycles != 2 {
+		t.Fatalf("expected stability cycles 2, got %d", cfg.ReconcilerStabilityCycles)
+	}
 	if cfg.EVMRPCURLs["local"] != "http://eth-node:8545" {
 		t.Fatalf("expected local evm rpc url to be parsed")
+	}
+}
+
+func TestLoadConfigRejectsBTCFinalityLessThanBusiness(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_MIN_CONFIRMATIONS", "3")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS", "2")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS_INVALID" {
+		t.Fatalf("expected CONFIG_RECONCILER_BTC_FINALITY_MIN_CONFIRMATIONS_INVALID, got %s", cfgErr.Code)
+	}
+}
+
+func TestLoadConfigRejectsInvalidReorgObserveWindow(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://chaintx:chaintx@localhost:5432/chaintx?sslmode=disable")
+	t.Setenv("PAYMENT_REQUEST_DEVTEST_KEYSETS_JSON", `{
+  "ethereum": {
+    "local": {
+      "keyset_id": "ks_eth_local",
+      "extended_public_key": "xpub6BfCU6SeCoGM26Ex6YKnPku57sABcfGprMzPzonYwDPi6Yd6ooHG72cvEC7XKgK1o7nUnyxydj11mXbvhHanRcRVoGhpYYuWJ3gRhPCmQKj",
+      "expected_index0_address": "0x61ed32e69db70c5abab0522d80e8f5db215965de"
+    }
+  }
+}`)
+	t.Setenv("PAYMENT_REQUEST_KEYSET_HASH_HMAC_SECRET", "active-secret")
+	t.Setenv("PAYMENT_REQUEST_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS", "0")
+
+	_, cfgErr := LoadConfig()
+	if cfgErr == nil {
+		t.Fatalf("expected error")
+	}
+	if cfgErr.Code != "CONFIG_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS_INVALID" {
+		t.Fatalf("expected CONFIG_RECONCILER_REORG_OBSERVE_WINDOW_SECONDS_INVALID, got %s", cfgErr.Code)
 	}
 }
 

@@ -10,13 +10,15 @@ import (
 )
 
 type Worker struct {
-	enabled       bool
-	pollInterval  time.Duration
-	batchSize     int
-	workerID      string
-	leaseDuration time.Duration
-	useCase       portsin.ReconcilePaymentRequestsUseCase
-	logger        *log.Logger
+	enabled            bool
+	pollInterval       time.Duration
+	batchSize          int
+	workerID           string
+	leaseDuration      time.Duration
+	reorgObserveWindow time.Duration
+	stabilityCycles    int
+	useCase            portsin.ReconcilePaymentRequestsUseCase
+	logger             *log.Logger
 }
 
 func NewWorker(
@@ -25,17 +27,21 @@ func NewWorker(
 	batchSize int,
 	workerID string,
 	leaseDuration time.Duration,
+	reorgObserveWindow time.Duration,
+	stabilityCycles int,
 	useCase portsin.ReconcilePaymentRequestsUseCase,
 	logger *log.Logger,
 ) *Worker {
 	return &Worker{
-		enabled:       enabled,
-		pollInterval:  pollInterval,
-		batchSize:     batchSize,
-		workerID:      workerID,
-		leaseDuration: leaseDuration,
-		useCase:       useCase,
-		logger:        logger,
+		enabled:            enabled,
+		pollInterval:       pollInterval,
+		batchSize:          batchSize,
+		workerID:           workerID,
+		leaseDuration:      leaseDuration,
+		reorgObserveWindow: reorgObserveWindow,
+		stabilityCycles:    stabilityCycles,
+		useCase:            useCase,
+		logger:             logger,
 	}
 }
 
@@ -49,11 +55,13 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 
 	w.logf(
-		"payment request reconciler started worker_id=%s poll_interval=%s batch_size=%d lease_duration=%s",
+		"payment request reconciler started worker_id=%s poll_interval=%s batch_size=%d lease_duration=%s reorg_observe_window=%s stability_cycles=%d",
 		w.workerID,
 		w.pollInterval,
 		w.batchSize,
 		w.leaseDuration,
+		w.reorgObserveWindow,
+		w.stabilityCycles,
 	)
 
 	w.runCycle(ctx)
@@ -74,10 +82,12 @@ func (w *Worker) Start(ctx context.Context) {
 func (w *Worker) runCycle(ctx context.Context) {
 	startedAt := time.Now().UTC()
 	output, appErr := w.useCase.Execute(ctx, dto.ReconcilePaymentRequestsCommand{
-		Now:           startedAt,
-		BatchSize:     w.batchSize,
-		WorkerID:      w.workerID,
-		LeaseDuration: w.leaseDuration,
+		Now:                startedAt,
+		BatchSize:          w.batchSize,
+		WorkerID:           w.workerID,
+		LeaseDuration:      w.leaseDuration,
+		ReorgObserveWindow: w.reorgObserveWindow,
+		StabilityCycles:    w.stabilityCycles,
 	})
 	if appErr != nil {
 		w.logf(
@@ -90,12 +100,14 @@ func (w *Worker) runCycle(ctx context.Context) {
 	}
 
 	w.logf(
-		"payment request reconcile cycle completed worker_id=%s claimed=%d scanned=%d confirmed=%d detected=%d expired=%d skipped=%d errors=%d latency_ms=%d",
+		"payment request reconcile cycle completed worker_id=%s claimed=%d scanned=%d confirmed=%d detected=%d reorged=%d reconfirmed=%d expired=%d skipped=%d errors=%d latency_ms=%d",
 		w.workerID,
 		output.Claimed,
 		output.Scanned,
 		output.Confirmed,
 		output.Detected,
+		output.Reorged,
+		output.Reconfirmed,
 		output.Expired,
 		output.Skipped,
 		output.Errors,

@@ -14,6 +14,7 @@ func TestParsePaymentRequestStatus(t *testing.T) {
 		{name: "pending", raw: "pending", valid: true, status: PaymentRequestStatusPending},
 		{name: "detected", raw: "detected", valid: true, status: PaymentRequestStatusDetected},
 		{name: "confirmed", raw: "confirmed", valid: true, status: PaymentRequestStatusConfirmed},
+		{name: "reorged", raw: "reorged", valid: true, status: PaymentRequestStatusReorged},
 		{name: "expired", raw: "expired", valid: true, status: PaymentRequestStatusExpired},
 		{name: "failed", raw: "failed", valid: true, status: PaymentRequestStatusFailed},
 		{name: "invalid", raw: "wat", valid: false},

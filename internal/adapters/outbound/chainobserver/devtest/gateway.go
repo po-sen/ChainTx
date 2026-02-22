@@ -21,13 +21,15 @@ const (
 )
 
 type Config struct {
-	BTCExploraBaseURL string
-	EVMRPCURLs        map[string]string
-	DetectedBPS       int
-	ConfirmedBPS      int
-	BTCMinConf        int
-	EVMMinConf        int
-	HTTPTimeout       time.Duration
+	BTCExploraBaseURL  string
+	EVMRPCURLs         map[string]string
+	DetectedBPS        int
+	ConfirmedBPS       int
+	BTCMinConf         int
+	BTCFinalityMinConf int
+	EVMMinConf         int
+	EVMFinalityMinConf int
+	HTTPTimeout        time.Duration
 }
 
 type paymentObserver interface {
@@ -57,7 +59,9 @@ func NewGateway(cfg Config) *Gateway {
 	)
 	confirmations := newConfirmationPolicy(
 		cfg.BTCMinConf,
+		cfg.BTCFinalityMinConf,
 		cfg.EVMMinConf,
+		cfg.EVMFinalityMinConf,
 		defaultBTCMinConf,
 		defaultEVMMinConf,
 	)

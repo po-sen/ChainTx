@@ -14,7 +14,17 @@ import (
 
 func TestWorkerDisabled(t *testing.T) {
 	fakeUseCase := &fakeReconcileUseCase{}
-	worker := NewWorker(false, 10*time.Millisecond, 10, "worker-a", 30*time.Second, fakeUseCase, nil)
+	worker := NewWorker(
+		false,
+		10*time.Millisecond,
+		10,
+		"worker-a",
+		30*time.Second,
+		24*time.Hour,
+		2,
+		fakeUseCase,
+		nil,
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
@@ -27,7 +37,17 @@ func TestWorkerDisabled(t *testing.T) {
 
 func TestWorkerRunsCycle(t *testing.T) {
 	fakeUseCase := &fakeReconcileUseCase{}
-	worker := NewWorker(true, 10*time.Millisecond, 10, "worker-a", 30*time.Second, fakeUseCase, nil)
+	worker := NewWorker(
+		true,
+		10*time.Millisecond,
+		10,
+		"worker-a",
+		30*time.Second,
+		24*time.Hour,
+		2,
+		fakeUseCase,
+		nil,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -46,6 +66,12 @@ func TestWorkerRunsCycle(t *testing.T) {
 	}
 	if last.LeaseDuration != 30*time.Second {
 		t.Fatalf("expected lease duration 30s, got %s", last.LeaseDuration)
+	}
+	if last.ReorgObserveWindow != 24*time.Hour {
+		t.Fatalf("expected reorg observe window 24h, got %s", last.ReorgObserveWindow)
+	}
+	if last.StabilityCycles != 2 {
+		t.Fatalf("expected stability cycles 2, got %d", last.StabilityCycles)
 	}
 }
 
